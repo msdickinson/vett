@@ -416,8 +416,10 @@ summary number doesn't collapse "actually correct" and "sounded done" into
 the same count.
 
 On the 25 easiest SWE-bench Verified instances, running the `openhands`
-profile against Qwen3-Coder-Next FP8 served with vLLM on NVIDIA DGX Sparks:
-one Spark running five instances at a time resolved **21/25 (84%)** at 100
+profile against DeepSeek V4 Flash served with vLLM across two NVIDIA DGX
+Sparks (tensor-parallel 2, five instances at a time, 500-iteration cap)
+resolved **23/25 (92%)** in 54 minutes of agent time. Earlier runs used
+Qwen3-Coder-Next FP8: one Spark running five instances at a time resolved **21/25 (84%)** at 100
 iterations per instance, and **22/25 (88%)** at 200 iterations, for roughly
 39% more wall-clock time. Two
 Sparks running ten at a time — double the concurrency, same 100-iteration

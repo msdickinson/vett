@@ -50,14 +50,15 @@ license are in [NOTICE](NOTICE). Everything else is VETT's own:
 ## Results
 
 On the 25 easiest SWE-bench Verified instances (`suites/swe-bench-easiest25.yaml`),
-`openhands` profile, Qwen3-Coder-Next FP8 served with vLLM on NVIDIA DGX
-Sparks, graded with the SWE-bench harness. One run per row.
+`openhands` profile, models served with vLLM on NVIDIA DGX Sparks, graded
+with the official SWE-bench harness. One run per row.
 
-| Setup | Resolved | Wall time |
-|---|---|---|
-| One Spark, 5 at a time, 100 iterations | 21/25 (84%) | 3 h 44 m |
-| One Spark, 5 at a time, 200 iterations | 22/25 (88%) | 5 h 11 m |
-| Two Sparks, 10 at a time, 100 iterations | 20/25 (80%) | 1 h 51 m |
+| Model | Setup | Resolved | Wall time |
+|---|---|---|---|
+| DeepSeek V4 Flash (current) | Two Sparks (TP=2), 5 at a time, 500 iterations | 23/25 (92%) | 54 m (agent phase) |
+| Qwen3-Coder-Next FP8 (earlier) | One Spark, 5 at a time, 100 iterations | 21/25 (84%) | 3 h 44 m |
+| Qwen3-Coder-Next FP8 (earlier) | One Spark, 5 at a time, 200 iterations | 22/25 (88%) | 5 h 11 m |
+| Qwen3-Coder-Next FP8 (earlier) | Two Sparks, 10 at a time, 100 iterations | 20/25 (80%) | 1 h 51 m |
 
 How the 25 were picked: SWE-bench Verified's "<15 min fix" difficulty
 band, then the shortest problem statements. Sampling: temperature 1.0,
