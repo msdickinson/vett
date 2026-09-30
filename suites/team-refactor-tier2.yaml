@@ -1,0 +1,405 @@
+name: team-refactor-tier2
+description: |
+  Tier 2: refactor existing code while keeping the seeded test suite
+  green. Each instance ships a pre-implemented file with a known
+  smell (long method, primitive obsession, anemic domain model, etc)
+  PLUS a passing test suite. The agent must improve the design
+  WITHOUT breaking the tests.
+
+  This is a step up from "build from scratch" — the agent has to
+  read existing code, understand its contract, and modify it
+  carefully. Each instance also adds a NEW test that the seeded
+  code DOESN'T pass yet (capability gap), forcing the refactor to
+  be substantive (not just rearranging).
+
+  Verified by `dotnet test`:
+    - All seeded tests still pass (no regression)
+    - The new "after refactor" test now passes
+  Both conditions enforced by min_passed >= total expected.
+
+  Run: vett team-bench team-refactor-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: r1-extract-method
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Long method (~30 lines doing parse + validate + format) needs
+      to be split into named helpers. New test asserts a regex on
+      ONE of the helper names — forces real extraction, not just
+      whitespace shuffling. All existing tests must still pass.
+    workspace: empty-git-repo
+    seed_files:
+      Refactor.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Refactor</RootNamespace>
+            <AssemblyName>Refactor</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      OrderFormatter.cs: |
+        namespace Refactor;
+
+        public static class OrderFormatter
+        {
+            // SMELL: one giant method that parses, validates, and formats.
+            // Refactor target: split into named helpers (Parse / Validate /
+            // Format) on a single class. Behavior must stay identical.
+            public static string FormatLine(string raw)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    throw new ArgumentException("raw is empty");
+                var parts = raw.Split('|');
+                if (parts.Length != 3)
+                    throw new ArgumentException("expected 3 fields separated by |");
+                var sku = parts[0].Trim();
+                if (sku.Length == 0)
+                    throw new ArgumentException("sku is empty");
+                if (!int.TryParse(parts[1].Trim(), out var qty))
+                    throw new ArgumentException("quantity is not an integer");
+                if (qty <= 0)
+                    throw new ArgumentException("quantity must be positive");
+                if (!decimal.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var price))
+                    throw new ArgumentException("price is not a decimal");
+                if (price < 0)
+                    throw new ArgumentException("price must be non-negative");
+                var total = qty * price;
+                return $"{sku} x{qty} @ {price.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} = {total.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}";
+            }
+        }
+      OrderFormatter_Tests.cs: |
+        namespace Refactor;
+
+        public class OrderFormatter_Tests
+        {
+            // Behavior tests — must keep passing through the refactor.
+            [Theory]
+            [InlineData("WIDGET|2|5.00",   "WIDGET x2 @ 5.00 = 10.00")]
+            [InlineData("A | 3 | 1.5",      "A x3 @ 1.50 = 4.50")]
+            [InlineData("FOO|1|0",          "FOO x1 @ 0.00 = 0.00")]
+            public void Format_Valid(string raw, string expected)
+            {
+                Assert.Equal(expected, OrderFormatter.FormatLine(raw));
+            }
+
+            [Theory]
+            [InlineData("")]
+            [InlineData("   ")]
+            [InlineData("only|two")]
+            [InlineData("a|b|c|d")]
+            [InlineData("|2|5.00")]              // empty sku
+            [InlineData("X|abc|5.00")]           // non-int qty
+            [InlineData("X|0|5.00")]             // zero qty
+            [InlineData("X|-1|5.00")]            // negative qty
+            [InlineData("X|2|abc")]              // non-decimal price
+            [InlineData("X|2|-1")]               // negative price
+            public void Format_InvalidThrows(string raw)
+            {
+                Assert.ThrowsAny<Exception>(() => OrderFormatter.FormatLine(raw));
+            }
+        }
+      Structure_Tests.cs: |
+        using System.Reflection;
+        using System.Linq;
+
+        namespace Refactor;
+
+        // After-refactor invariants. The seeded code (one giant
+        // FormatLine method) fails this — the agent has to extract
+        // real helpers to make it pass. Reflection-based, no source
+        // file reads (those don't work cleanly because dotnet test
+        // runs from the bin/ output dir, not the workspace).
+        public class Structure_Tests
+        {
+            [Fact]
+            public void OrderFormatter_HasMultipleNamedHelpers()
+            {
+                var t = typeof(OrderFormatter);
+                var methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                               .Where(m => m.DeclaringType == t)
+                               .Where(m => !m.IsSpecialName)
+                               .ToArray();
+                // Refactor target: at least 3 methods on OrderFormatter
+                // (FormatLine + ≥2 named helpers). Seeded code has 1.
+                Assert.True(methods.Length >= 3,
+                    $"Expected ≥3 methods on OrderFormatter, found {methods.Length}: " +
+                    string.Join(", ", methods.Select(m => m.Name)));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace already has a working `OrderFormatter.cs` with a
+      single ~30-line method `FormatLine` that does three jobs at
+      once: parsing, validation, and formatting.
+
+      REFACTOR `OrderFormatter.cs` to extract named helpers WITHOUT
+      changing observable behavior.
+
+      Concrete requirements:
+        1. ALL existing tests in `OrderFormatter_Tests.cs` must keep
+           passing (no behavior change, no error-message change that
+           the tests check, etc).
+        2. Add new `Structure_Tests.cs` constraints (also seeded):
+           - OrderFormatter must have at least 3 public/non-public
+             static methods declared on it (FormatLine + ≥2 helpers).
+           - The body of FormatLine itself must be ≤12 lines (i.e.
+             FormatLine becomes orchestration, not implementation).
+
+      Suggested split (you can pick any names that make sense, but
+      something like this works):
+        - Parse(raw) → (sku, qty, price)
+        - ValidateLine(sku, qty, price)
+        - FormatLine(sku, qty, price total)
+      Then `FormatLine(string raw)` becomes ~5 lines that call them
+      in sequence.
+
+      DO NOT delete or rename existing tests. DO NOT change the
+      OrderFormatter class name or the FormatLine signature.
+
+      DO NOT run `dotnet test` yourself — just edit OrderFormatter.cs
+      and report done; the bench harness verifies. All 13 behavior
+      cases plus 1 structural case (14 total) must pass.
+    timeout_seconds: 540
+    assertions:
+      - file: OrderFormatter.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 14
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 16
+
+  - id: r2-primitive-obsession
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Replace primitive `string` arguments for email + phone with
+      typed value objects (Email, PhoneNumber) while keeping the
+      User class's external behavior identical from the test's
+      perspective.
+    workspace: empty-git-repo
+    seed_files:
+      User.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>People</RootNamespace>
+            <AssemblyName>People</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      User.cs: |
+        namespace People;
+
+        // SMELL: primitive obsession on Email and Phone (both `string`).
+        // Validation logic is mixed into the User class. After refactor,
+        // these should be Email and PhoneNumber value objects with
+        // their own validation in their constructors.
+        public class User
+        {
+            public string Name  { get; }
+            public string Email { get; }
+            public string Phone { get; }
+
+            public User(string name, string email, string phone)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new ArgumentException("name required");
+                if (!email.Contains('@') || !email.Contains('.'))
+                    throw new ArgumentException("email invalid");
+                if (phone.Length < 7 || !phone.All(c => char.IsDigit(c) || c == '-' || c == ' ' || c == '+'))
+                    throw new ArgumentException("phone invalid");
+                Name = name;
+                Email = email;
+                Phone = phone;
+            }
+
+            public string Display() => $"{Name} <{Email}> ({Phone})";
+        }
+      User_Tests.cs: |
+        namespace People;
+
+        public class User_Tests
+        {
+            [Fact]
+            public void New_ValidUser_StoresFields()
+            {
+                var u = new User("Mark", "mark@example.com", "555-1234");
+                Assert.Equal("Mark", u.Name);
+                Assert.Equal("mark@example.com", u.Email);
+                Assert.Equal("555-1234", u.Phone);
+            }
+
+            [Fact]
+            public void Display_HasExpectedShape()
+            {
+                var u = new User("Mark", "m@e.com", "555 9999");
+                Assert.Equal("Mark <m@e.com> (555 9999)", u.Display());
+            }
+
+            [Theory]
+            [InlineData("", "ok@e.com", "555-9999")]      // empty name
+            [InlineData("Name", "noatsign", "555-9999")]   // bad email
+            [InlineData("Name", "no@dotsign", "555-9999")] // bad email
+            [InlineData("Name", "ok@e.com", "no")]         // short phone
+            [InlineData("Name", "ok@e.com", "555-abc-9999")] // letters
+            public void New_InvalidArgs_Throws(string name, string email, string phone)
+            {
+                Assert.ThrowsAny<Exception>(() => new User(name, email, phone));
+            }
+        }
+      Structure_Tests.cs: |
+        using System;
+        using System.Reflection;
+
+        namespace People;
+
+        // After-refactor invariants — Email and PhoneNumber must exist
+        // as their own classes, and User's properties must be typed
+        // accordingly.
+        public class Structure_Tests
+        {
+            [Fact]
+            public void Email_Type_Exists()
+            {
+                var t = Type.GetType("People.Email, People");
+                Assert.NotNull(t);
+            }
+
+            [Fact]
+            public void PhoneNumber_Type_Exists()
+            {
+                var t = Type.GetType("People.PhoneNumber, People");
+                Assert.NotNull(t);
+            }
+
+            [Fact]
+            public void User_Email_Property_IsEmailType()
+            {
+                var p = typeof(User).GetProperty("Email");
+                Assert.NotNull(p);
+                Assert.Equal("Email", p!.PropertyType.Name);
+            }
+
+            [Fact]
+            public void User_Phone_Property_IsPhoneNumberType()
+            {
+                var p = typeof(User).GetProperty("Phone");
+                Assert.NotNull(p);
+                Assert.Equal("PhoneNumber", p!.PropertyType.Name);
+            }
+
+            [Fact]
+            public void Email_DoesValidationItself()
+            {
+                var t = Type.GetType("People.Email, People")!;
+                Assert.ThrowsAny<Exception>(() => Activator.CreateInstance(t, new object[] { "noatsign" }));
+            }
+
+            [Fact]
+            public void PhoneNumber_DoesValidationItself()
+            {
+                var t = Type.GetType("People.PhoneNumber, People")!;
+                Assert.ThrowsAny<Exception>(() => Activator.CreateInstance(t, new object[] { "no" }));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has a `User.cs` class with primitive-obsession:
+      Email and Phone are both `string`, and their validation lives
+      in the `User` constructor.
+
+      REFACTOR to introduce two value-object classes — `Email` and
+      `PhoneNumber` — both in the `People` namespace, both validating
+      themselves in their constructors. Wire User to use them.
+
+      Concrete requirements:
+        1. Create `Email.cs` and `PhoneNumber.cs` in the `People`
+           namespace. Each takes a single string in its ctor and
+           throws on invalid input. Email must reject "noatsign"
+           (and other invalid forms). PhoneNumber must reject "no"
+           (too short).
+        2. Update `User.cs` so:
+           - `User.Email` is now of type `Email` (NOT `string`).
+           - `User.Phone` is now of type `PhoneNumber` (NOT `string`).
+           - The constructor signature can take strings OR the new
+             types — your choice; just make the existing tests pass.
+           - `Display()` still returns `"{Name} <{Email}> ({Phone})"`
+             with the same formatting (so the VOs need a sensible
+             `ToString()`).
+        3. ALL existing tests in `User_Tests.cs` must pass unchanged.
+        4. ALL `Structure_Tests.cs` must pass (verifies the types
+           exist, are wired correctly, and validate themselves).
+
+      Total tests: 7 behavior + 6 structural = 13.
+
+      DO NOT run `dotnet test` yourself — just edit/create the .cs
+      files and report done; the bench harness verifies.
+    timeout_seconds: 540
+    assertions:
+      - file: Email.cs
+        exists: true
+      - file: PhoneNumber.cs
+        exists: true
+      - file: User.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 13
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 18

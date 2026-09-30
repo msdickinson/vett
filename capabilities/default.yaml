@@ -1,0 +1,211 @@
+# Capability catalogue — what a seat can ASK FOR, and where that can be served.
+#
+# WHY THIS FILE EXISTS
+#
+# A profile that hard-codes `endpoint:` has already decided, at authoring
+# time, whose hardware runs the model — months before anyone can know what is
+# actually free. This file inverts that: a profile states what it NEEDS
+# ("flash", and how much context), and the endpoint is chosen at the moment of
+# the run, when the answer is knowable.
+#
+# WHAT YOU CANNOT READ OFF A PROFILE
+#
+# `llm.provider` looks like it says local-vs-cloud. It does not — it selects
+# the client CODE PATH. Measured 2026-08-28: 9 of the 18 shipped profiles say
+# `provider: local` while pointing at https://openrouter.ai/api/v1. Only
+# `endpoint` ever told the truth, which is why locality is declared
+# explicitly here.
+#
+# THE ALLOCATION UNIT IS TOKENS, NOT SEATS
+#
+# Local flash is one finite pool of context. "A few large-context sessions"
+# and "many small ones" spend the SAME pool, so a seat count cannot express
+# the trade and is not used as one anywhere in this file.
+
+capabilities:
+  - name: flash
+    description: >
+      Fast working model for implementation. Served BOTH locally and from
+      cloud, so a flash request usually has two doors — but only up to the
+      local window. Past 131072 tokens the local door closes on window alone
+      and flash becomes cloud-only, at the same size that costs money.
+    providers:
+      # ---------------------------------------------------------------
+      # LOCAL. Free to run, finite in cache. Always preferred when it fits.
+      # ---------------------------------------------------------------
+      - name: local-gpu-1
+        locality: local
+        endpoint: http://gpu-1:8000/v1
+        model: deepseek-v4-flash
+        # No api_key_env: the local vLLM does not authenticate.
+
+        # RE-MEASURED on gpu-1 http://gpu-1:8000/v1, 2026-08-28 late,
+        # from the engine's own /v1/models (both ids report it), confirmed
+        # independently by `vett capacity probe`.
+        #
+        # ⚠ THIS LINE SAID 65536 AND WAS STALE. The engine had been restarted
+        # under a different launch flag between the two readings -- which is
+        # exactly what the warning below predicted, so treat that warning as
+        # load-bearing rather than boilerplate. The 65536 was not merely
+        # cosmetic: it closed the local door at half the real window and sent
+        # everything above it to the cloud, silently converting free capacity
+        # into spend.
+        #
+        # This is a LAUNCH FLAG (--max-model-len), not a property of the
+        # weights. It tracks how the server was started, so re-probe it rather
+        # than trusting this line after any restart. `vett capacity probe`
+        # reports the drift without spending a token.
+        served_window_tokens: 131072
+
+        # RE-MEASURED 2026-08-28 late, from vllm:cache_config_info on
+        # http://gpu-1:8000/metrics: kv_cache_size_tokens=1408266
+        # (num_gpu_blocks=24153, block_size=4, gpu_memory_utilization=0.85).
+        # The engine's own kv_cache_max_concurrency=10.74 agrees:
+        # 1408266 / 131072 = 10.74 full-window sequences.
+        #
+        # ⚠ THE PREVIOUS READING WAS 629666 AND THE PUBLISHED FIGURE 480000.
+        # Every number here moved together -- window, pool, and idle usage --
+        # which is the signature of a RESTARTED ENGINE, not of drift in one
+        # value. Do not mix a window from one reading with a pool from
+        # another; they are a matched pair belonging to one server process.
+        #
+        # We still publish LESS than we measured, for one reason that survived
+        # the restart and one that did not:
+        #   - SURVIVES: vLLM runs with --no-scheduler-reserve-full-isl, so it
+        #     NEVER refuses an over-subscription. It preempts instead (evict +
+        #     recompute). Over-committing therefore shows up as latency
+        #     collapse, never as an error anyone can catch. The headroom is
+        #     what keeps us off that cliff.
+        #   - GONE: the old discount also paid for ~9.16% idle KV (~57700
+        #     tokens of retained prefix blocks at a 64.8% lifetime hit rate).
+        #     kv_cache_usage_perc now reads 0.0 on an idle engine, so that
+        #     part of the reservation is no longer buying anything.
+        #
+        # ⚠ THE DISCOUNT RATIO IS CARRIED OVER, NOT RE-DERIVED. 480000/629666
+        # = 0.762; the same ratio on 1408266 gives 1073500, rounded down here.
+        # The MEASUREMENT is new; the CONSERVATISM is inherited judgment, and
+        # keeping it is deliberately stricter than the reasoning above now
+        # requires. ⛔ NOT LOAD-TESTED at this size -- no run has yet held
+        # anything near 1070000 tokens of live leases against this engine.
+        #
+        # Why it was worth changing rather than leaving safe-but-stale: at
+        # 480000 a team of 60000-token seats is capped at EIGHT members, which
+        # sits below the 10-20-under-a-manager target and would have surfaced
+        # as an unexplained capacity refusal rather than as a tunable.
+        pool_tokens: 1070000
+
+        # Compact at 75% of whatever was GRANTED, not of the server ceiling:
+        # a seat granted 32k must compact inside 32k.
+        #
+        # WHERE 0.75 CAME FROM: 0.75 x 65536 = 49152, which reproduces the
+        # 48000 threshold the profiles were hand-tuned to. ⚠ THAT WINDOW HAS
+        # SINCE MOVED to 131072 (see served_window_tokens above). The RATIO is
+        # unaffected -- it is a fraction of the GRANT, so a seat still granted
+        # 65536 still compacts at ~48000. What DID change is that 48000 is no
+        # longer "75% of the ceiling": a full-window seat here now compacts at
+        # 98304. The ratio survived the restart; the arithmetic coincidence
+        # that made it look derived from the ceiling did not. Do not re-derive
+        # 0.75 from the new window and conclude the ratio should change.
+        compaction_ratio: 0.75
+
+      # ---------------------------------------------------------------
+      # CLOUD. Unbounded in cache, bounded by money.
+      # ---------------------------------------------------------------
+      - name: openrouter-flash
+        locality: cloud
+        endpoint: https://openrouter.ai/api/v1
+        model: deepseek/deepseek-v4-flash
+        api_key_env: DEEPSEEK_API_KEY
+        budget: flash-cloud
+        # MEASURED 2026-08-28 by `vett capacity probe` (GET /models, no
+        # completions, no spend) -- which is the workflow the previous comment
+        # here pointed at.
+        #
+        # ⛔ OPENROUTER PUBLISHES TWO WINDOWS AND THE BIGGER ONE IS LISTED
+        # FIRST. `context_length` is the MODEL's advertised ceiling (1048576);
+        # `top_provider.context_length` is what the provider that actually
+        # serves the request offers (1024000). The narrower number is the one
+        # that binds, so it is the one recorded. The probe read the optimistic
+        # field until it was checked against a raw curl of the same URL on
+        # 2026-08-28 and fixed to take the smallest candidate present.
+        served_window_tokens: 1024000
+        compaction_ratio: 0.75
+        # pool_tokens absent: cloud has no cache pool to ration. Its limit is
+        # the spend budget, which is tracked as money, never as tokens.
+
+  - name: pro
+    description: >
+      Stronger model for escalation and review. CLOUD ONLY — there is no
+      local Pro at any context size. A pro request that cannot reach cloud
+      has exactly one correct behaviour: wait. It is never silently served
+      by flash, because that would answer a different question than the one
+      asked, and would do so invisibly.
+    providers:
+      - name: openrouter-pro
+        locality: cloud
+        endpoint: https://openrouter.ai/api/v1
+        model: deepseek/deepseek-v4-pro
+        api_key_env: DEEPSEEK_API_KEY
+        budget: pro
+        # MEASURED 2026-08-28 by `vett capacity probe`; same two-window caveat
+        # as openrouter-flash above, and the same narrower number recorded.
+        served_window_tokens: 1024000
+        compaction_ratio: 0.78
+
+# ===================================================================
+# SPEND BUDGETS
+#
+# A cloud provider's limit is money, not cache. Budgets express that, and
+# they express it per WALLET rather than per model, so both shapes work:
+#
+#   SEPARATE  ($50 for pro AND $50 for flash) — the shape below. Each cloud
+#             provider names its own budget, so spending out flash leaves pro
+#             untouched.
+#
+#   SHARED    ($50 across both) — delete one budget and point BOTH providers
+#             at the survivor:
+#                 budget: deepseek       # on openrouter-flash
+#                 budget: deepseek       # on openrouter-pro
+#             ...with a single `- name: deepseek` entry here. Two providers
+#             share a wallet exactly when they name the same budget.
+#
+# Omitting `budget:` on a provider gives it a private, unlimited one, so
+# budgets are SEPARATE by default and sharing is always an explicit act.
+#
+# ⛔ NO LIMIT IS SET BELOW, ON PURPOSE.
+#
+# A declared limit_usd FAILS CLOSED: once set, the provider is shut until a
+# billing reading has been recorded, and shut again once that reading goes
+# stale. That is the correct behaviour for a money gate — a gate that admits
+# work when it cannot see the balance is not a gate — but it means uncommenting
+# a limit STOPS CLOUD WORK until you also run:
+#
+#     vett capacity spend --budget pro --usd 12.34 --source "openrouter /credits"
+#
+# ⛔ AND THAT NUMBER MUST BE READ FROM BILLING, NEVER COMPUTED FROM TOKENS.
+# Logged tokens times a list price is not billed cost: cache discounts move
+# the two apart, and they move them by different amounts for different runs,
+# so the error does not cancel even when comparing one run against another.
+# Nothing in this system estimates spend; it only records what billing said,
+# together with where it was read from.
+# ===================================================================
+budgets:
+  - name: flash-cloud
+    # limit_usd: 50
+    period: month
+    stale_after_hours: 24
+    note: >
+      Cloud flash. Substitutable at small sizes — if this wallet shuts, a
+      small-context flash request simply waits for the local pool instead of
+      failing. Past the local 131072 window there is no such fallback.
+      (This note said 65536 until the 2026-08-28 re-measurement, so the
+      free-substitution range is twice what it used to claim -- the stale
+      figure was sending paid traffic at sizes the local pool could serve.)
+
+  - name: pro
+    # limit_usd: 50
+    period: month
+    stale_after_hours: 24
+    note: >
+      Pro is cloud-only, so this wallet has no local alternative behind it.
+      When it shuts, pro work WAITS — it is never downgraded to flash.

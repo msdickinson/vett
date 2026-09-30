@@ -1,0 +1,211 @@
+name: team-modify-method-tier2
+description: |
+  A5 — Modify Method. Existing method has a baseline behavior; new
+  requirement changes the contract (handle new input, fix a bug,
+  add a guard). One-method, one-file edit. Tests verify the new
+  behavior + existing tests stay green.
+
+  Augments `team-bugfix-tier2` (3 instances) with 2 more to round out
+  A5 coverage.
+
+  Run: vett team-bench team-modify-method-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # mm1 — Add unicode handling to Truncate
+  # ============================================================
+  - id: mm1-truncate-unicode
+    taxonomy: &a5_tax
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      A5 — Existing `StringHelpers.Truncate` handles ASCII correctly
+      but slices through unicode surrogate pairs. Change the method
+      so it never splits a surrogate pair (slice falls back to the
+      previous valid boundary).
+    workspace: empty-git-repo
+    seed_files:
+      Helpers.csproj: &helpers_csproj |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Helpers</RootNamespace>
+            <AssemblyName>Helpers</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      StringHelpers.cs: |
+        namespace Helpers;
+
+        public static class StringHelpers
+        {
+            public static string Truncate(string? value, int maxLength)
+            {
+                if (string.IsNullOrEmpty(value)) return string.Empty;
+                if (maxLength <= 0) return string.Empty;
+                if (value.Length <= maxLength) return value;
+                return value.Substring(0, maxLength);
+            }
+        }
+      StringHelpers_Tests.cs: |
+        namespace Helpers;
+
+        public class StringHelpers_Tests
+        {
+            [Fact] public void Null_ReturnsEmpty() => Assert.Equal("", StringHelpers.Truncate(null, 5));
+            [Fact] public void Empty_ReturnsEmpty() => Assert.Equal("", StringHelpers.Truncate("", 5));
+            [Fact] public void Shorter_Unchanged() => Assert.Equal("hi", StringHelpers.Truncate("hi", 5));
+            [Fact] public void Longer_Sliced() => Assert.Equal("hello", StringHelpers.Truncate("hello world", 5));
+            [Fact] public void ZeroMax_ReturnsEmpty() => Assert.Equal("", StringHelpers.Truncate("hi", 0));
+
+            // --- NEW: don't split a surrogate pair ---
+            // "🎉" is a surrogate pair (2 chars). Truncating "ab🎉" to 3 chars would
+            // leave a high-surrogate on the end. The fix: back off to the previous
+            // boundary so result is "ab" (2 chars).
+            [Fact] public void Surrogate_Slice_StopsAtBoundary()
+            {
+                var result = StringHelpers.Truncate("ab🎉", 3);
+                // Either "ab" (back off) or "ab🎉" (extend) is fine — what's NOT fine
+                // is leaving a high surrogate dangling. So just check no malformed.
+                foreach (var ch in result)
+                    Assert.False(char.IsHighSurrogate(ch) && result.IndexOf(ch) == result.Length - 1);
+            }
+            [Fact] public void Surrogate_Slice_AbovePair_Keeps()
+            {
+                Assert.Equal("ab🎉", StringHelpers.Truncate("ab🎉cd", 4));
+            }
+        }
+    prompt: |
+      `StringHelpers.Truncate` has 5 passing tests but 2 new tests fail
+      because it splits unicode surrogate pairs.
+
+      Dispatch an implementer to modify `Truncate` so it never leaves
+      a dangling high surrogate. Simplest fix: after slicing to
+      maxLength, if the last char is a high surrogate, drop it.
+
+      Keep the 5 existing tests green. Don't change the signature.
+      One-method, one-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: StringHelpers.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  # ============================================================
+  # mm2 — Add caching to expensive computation
+  # ============================================================
+  - id: mm2-fibonacci-memoize
+    taxonomy: *a5_tax
+    description: |
+      A5 — Existing recursive `Fibonacci(n)` is exponentially slow.
+      Change the method to memoize so it computes Fibonacci(50) in
+      well under a second.
+    workspace: empty-git-repo
+    seed_files:
+      Math.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MathLib</RootNamespace>
+            <AssemblyName>MathLib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Sequences.cs: |
+        namespace MathLib;
+
+        public static class Sequences
+        {
+            public static long Fibonacci(int n)
+            {
+                if (n < 0) throw new ArgumentException("n must be >= 0");
+                if (n <= 1) return n;
+                return Fibonacci(n - 1) + Fibonacci(n - 2);
+            }
+        }
+      Sequences_Tests.cs: |
+        namespace MathLib;
+
+        public class Sequences_Tests
+        {
+            [Theory]
+            [InlineData(0, 0)]
+            [InlineData(1, 1)]
+            [InlineData(2, 1)]
+            [InlineData(10, 55)]
+            [InlineData(20, 6765)]
+            public void Fib_Cases(int n, long expected) => Assert.Equal(expected, Sequences.Fibonacci(n));
+
+            [Fact] public void Fib_Negative_Throws() => Assert.ThrowsAny<Exception>(() => Sequences.Fibonacci(-1));
+
+            // --- NEW: large n must complete fast ---
+            [Fact]
+            public void Fib_50_FastEnough()
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var result = Sequences.Fibonacci(50);
+                sw.Stop();
+                Assert.Equal(12586269025L, result);
+                Assert.True(sw.ElapsedMilliseconds < 500, $"Fib(50) took {sw.ElapsedMilliseconds}ms — need < 500ms");
+            }
+        }
+    prompt: |
+      `Sequences.Fibonacci` works correctly for small `n` (6 tests pass)
+      but a new test requires it to compute Fibonacci(50) in under 500ms.
+      Today it's recursive without memoization — exponentially slow.
+
+      Dispatch an implementer to modify the method to memoize (cache
+      previously computed values) OR convert to iterative. Either works.
+
+      Keep the existing 6 tests green (same input → same output, same
+      negative-throws behavior). Don't change the signature. One-method,
+      one-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: Sequences.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16

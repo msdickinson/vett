@@ -1,0 +1,20 @@
+name: swe-bench-easiest25
+description: |
+  25 easiest SWE-bench Verified instances (shortest problem statements,
+  <15 min fix difficulty). The data ships in suites/data/. Uses the public
+  ghcr.io/epoch-research image mirror. This is the suite behind the results
+  table in the README.
+
+loader:
+  type: jsonl
+  path: data/swe-bench-easiest25.jsonl
+
+rendering:
+  working_dir: /testbed
+  docker_image_template: "ghcr.io/epoch-research/swe-bench.eval.x86_64.{instance}:latest"
+  fields:
+    problem_statement: problem_statement
+    base_commit: base_commit
+
+sandbox:
+  docker_image: ""

@@ -1,0 +1,52 @@
+# VETT task taxonomy — Tier 1.14 starting schema.
+#
+# 9 empirical dimensions for classifying bench instances. Each instance
+# in a team-bench suite carries a `taxonomy:` block keyed by dimension
+# name; the value must be a member of the dimension's `values:` list.
+#
+# This is a STARTING hypothesis, not a fixed schema. After Tier 1
+# calibration data lands (week 10 in the 90-day plan), the dimension
+# pruning step (Tier 1.17) computes reliability curves per dimension —
+# dimensions producing differentiating curves stay, ones that don't are
+# dropped or merged. Treat schema_version as a bump-on-prune signal.
+
+schema_version: 1
+description: Starting taxonomy for VETT team-bench instances — 9 dimensions, all required on every instance.
+
+dimensions:
+
+  - name: file_count_bucket
+    description: How many files the task is expected to touch. Bucketed so we don't over-fit to "exactly N files."
+    values: [1, 2-5, 6+]
+
+  - name: has_network_io
+    description: Does the solution require making real network calls (HTTP, SMTP, DNS) at any point during the run?
+    values: [yes, no]
+
+  - name: ambiguity_level
+    description: How much the prompt under-specifies what's needed. Low = single interpretation. High = several valid interpretations, agent must pick.
+    values: [low, medium, high]
+
+  - name: complexity_tier
+    description: Suite-tier proxy. Tier 1 = single-method, Tier 2 = class/module, Tier 3 = bounded context, Tier 4 = multi-context, Tier 5 = whole app, Tier 6 = greenfield product.
+    values: [1, 2, 3, 4, 5, 6]
+
+  - name: requires_test_writing
+    description: Does the task require the agent to author its own tests (not just run existing ones)?
+    values: [yes, no]
+
+  - name: touches_state_or_persistence
+    description: Does the solution touch a database, file system state, in-memory store, or any persisted state?
+    values: [yes, no]
+
+  - name: novel_api_vs_known
+    description: Is the agent expected to use APIs/libraries it's likely well-trained on (known) or rare/private ones (novel)?
+    values: [known, novel]
+
+  - name: requires_cross_file_changes
+    description: Does correctness require coordinated edits across 2+ files? (Different from file_count_bucket — a multi-file task may not require coordinated edits if files are independent.)
+    values: [yes, no]
+
+  - name: requires_external_research
+    description: Does the task plausibly require web search or docs lookup that's beyond standard knowledge?
+    values: [yes, no]

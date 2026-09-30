@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Pinned in global.json — keep CI in sync.
+          global-json-file: global.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar/go.mod
+
+      # The Go package embeds the sidecar binaries, so build them before vet/test.
+      - name: Sidecar build, vet, test
+        working-directory: sidecar
+        run: |
+          make sidecar-all
+          go vet ./...
+          go test ./... -count=1
+
+      - name: Restore
+        run: dotnet restore Vett.slnx
+
+      - name: Build
+        run: dotnet build Vett.slnx --no-restore --configuration Release
+
+      # A few tests time real silences or races; on a busy shared runner they
+      # can miss by a hair. One full rerun: a real failure fails both times.
+      - name: Test
+        run: |
+          dotnet test Vett.slnx --no-build --configuration Release --verbosity normal \
+            || dotnet test Vett.slnx --no-build --configuration Release
+
+      - name: Pack tool
+        run: dotnet pack src/Vett/Vett.csproj --no-build --configuration Release --output nupkg

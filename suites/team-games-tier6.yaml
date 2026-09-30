@@ -1,0 +1,795 @@
+name: team-games-tier6
+description: |
+  Tier 6: full-system one-shot game builds. Each instance ships a
+  BUILD.md spec in the workspace; agent must build the entire
+  system per the spec in a single dispatch.
+
+  ⚠ RULER v2 (2026-08-24). This suite previously asserted ONLY
+  `exists: true` on three files. That gate passed code that does
+  not compile: on 2026-08-24 two paid runs of g1 were scored PASS,
+  and re-grading by hand found one of them had 3x CS1061 in
+  IntegrationTests.cs, a TypeScript client that failed tsc, and a
+  Dockerfile that never built the client at all. A third run
+  (g3-cycle) cleared all three existence assertions while shipping
+  ZERO browser-client code.
+  ⭐ A GREEN RESULT ON AN UNINSPECTED VERIFIER IS NOT EVIDENCE.
+
+  The build/test assertions below are NOT new requirements — they
+  are transcribed verbatim from each instance's own BUILD.md
+  "Acceptance — ALL must pass" section (g1/g2: `dotnet build`
+  exits 0 + `dotnet test` >=10 passing; g3: >=15 passing). The
+  spec always demanded them; only the gate failed to check.
+  The original "too big to assert via xUnit / many parts are
+  visual" rationale justifies not asserting BROWSER GAMEPLAY. It
+  never justified skipping the compiler.
+
+  ⛔ NEVER POOL v1-graded and v2-graded runs — different
+  instruments on the same artifacts. Runs before 2026-08-24 were
+  scored under v1. Expect v2 to be materially harder; that is the
+  point, and a resulting drop in pass rate is a corrected
+  measurement, not a regression.
+  ⚠ STILL UNMEASURED even under v2: the container is never built
+  or started, and the game is never played. `docker compose up`
+  and the browser flow remain manual-review only.
+
+  Run: vett team-bench team-games-tier6
+
+profile: ds-team-flash
+tier: 6
+
+instances:
+  - id: g1-blocks-2p
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "yes"
+      ambiguity_level: "high"
+      complexity_tier: "6"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: Blocks 2P online HTML game w/ AI bot fallback
+    workspace: empty-git-repo
+    seed_files:
+      BUILD.md: |
+        # Blocks-2P — Build Spec (one-shot)
+        
+        This document is the complete build specification. The agent should read it in full and build the entire system in one dispatch, then report results. Do NOT check in mid-way.
+        
+        ## Vision
+        
+        Two-player online Blocks. Classic gameplay: pieces fall, rotate, lock; clear lines; game speed increases. Multiplayer twist: clearing 2+ lines at once sends "garbage" rows to the opponent's stack. Last player standing wins.
+        
+        If only one human joins, an AI bot fills the second seat so you can always play. Bot is simple but plays the game (avoids losing, places pieces sensibly).
+        
+        ## Tech stack (non-negotiable)
+        
+        | Layer | Choice |
+        |---|---|
+        | Server | ASP.NET Core 10 + SignalR |
+        | Client | Vanilla TypeScript + Vite + HTML5 Canvas (no React/Vue, no Babylon) |
+        | Live game state | In-memory on server (server-authoritative) |
+        | Persistence | None for v0 — no match history, no accounts |
+        | Hosting | Docker on the runner box via docker-compose |
+        | Auth | None — anonymous play with guest display name |
+        | Solution file | `.slnx` (NOT `.sln`) |
+        | Folder names | lowercase-hyphenated |
+        | Project names | PascalCase in .NET csproj |
+        | Project subfolders | `src/`, `tests/`, `docs/` |
+        | Tick rate | Server simulates at the piece-gravity rate (~1Hz per row falling, scaling with level). Broadcasts state-deltas on every state change. |
+        
+        ## Solution layout (exact)
+        
+        ```
+        games/blocks-2p/
+        ├── Blocks.slnx
+        ├── Dockerfile
+        ├── docker-compose.yml
+        ├── src/
+        │   └── Blocks.Server/                  # ASP.NET Core 10
+        ├── tests/
+        │   └── Blocks.Server.Tests/            # xUnit
+        └── web/
+            └── Blocks.Web/                     # TypeScript + Vite + Canvas
+        ```
+        
+        ## Domain model
+        
+        ```csharp
+        public sealed class GameSession {
+            Guid Id;
+            IReadOnlyList<Player> Players;            // exactly 2
+            IReadOnlyDictionary<Guid, Board> Boards;  // keyed by playerId
+            SessionState State;                       // Lobby | Countdown | Playing | Ended
+        }
+        
+        public sealed class Player {
+            Guid Id;
+            string DisplayName;
+            PlayerKind Kind;                          // Human | AiBot
+            string? ConnectionId;
+        }
+        
+        public sealed class Board {
+            int Width = 10;
+            int Height = 20;
+            Cell[,] Grid;                             // 0 = empty, 1+ = piece-color-id
+            Piece? Active;                            // currently-falling piece (null between locks)
+            Piece NextPreview;
+            int Score;
+            int Level;                                // increases every 10 lines cleared
+            int LinesCleared;
+            bool IsGameOver;
+            int PendingGarbageRows;                   // sent by opponent, applied next lock
+        }
+        
+        public sealed class Piece {
+            PieceType Type;                           // I, O, T, S, Z, L, J
+            int X, Y;                                 // top-left of bounding box, in grid cells
+            int Rotation;                             // 0..3
+        }
+        ```
+        
+        ## SignalR messages
+        
+        ### Client → Server
+        
+        | Method | Args | Purpose |
+        |---|---|---|
+        | `JoinLobby` | `{displayName}` | Join queue; matched when 2 humans (or 1 human + 5s idle → bot fills) |
+        | `SubmitInput` | `{sessionId, action: "MoveLeft" \| "MoveRight" \| "RotateCW" \| "SoftDrop" \| "HardDrop"}` | Player input; server validates + applies |
+        | `LeaveSession` | `{sessionId}` | Voluntary exit; bot replaces |
+        
+        ### Server → Client
+        
+        | Method | Args | Rate |
+        |---|---|---|
+        | `LobbyState` | `{playersInLobby}` | 1Hz to lobby |
+        | `SessionAssigned` | `{sessionId, players, yourPlayerId}` | on match |
+        | `CountdownTick` | `{sessionId, secondsRemaining}` | 3-2-1-GO before play |
+        | `BoardState` | `{sessionId, boards: {playerId: BoardSnapshot}}` | on every state change (piece move/lock/clear/garbage) |
+        | `GameEnded` | `{sessionId, winner?, scoreboard}` | on round end (one player tops out) |
+        
+        ## Game rules (concrete)
+        
+        - Board: 10 wide × 20 tall. Spawn pieces at column 3-4 of row 0.
+        - Pieces: 7 standard tetrominoes (I, O, T, S, Z, L, J), random bag (7-bag randomizer).
+        - Gravity: starts at 1 row/sec; speeds up by ×1.5 every 10 lines cleared, capped at 10 rows/sec.
+        - Locking: piece locks when it can't fall further (soft delay is OK but not required — instant lock is acceptable for v0).
+        - Line clear: full rows clear; pieces above shift down.
+        - Scoring: 100 points per line, ×combo multiplier when clearing multiple rows in one lock (1=100, 2=300, 3=500, 4=800).
+        - **Garbage system: clearing 2+ rows sends garbage to opponent.** Garbage = solid rows with one random gap per row. Rows sent = (rows cleared − 1). So clearing 4 (blocks) sends 3 rows.
+        - Garbage applies on opponent's NEXT piece lock — rises from the bottom of their board.
+        - Game over: a piece spawns colliding with existing blocks.
+        
+        ## AI bot (simple but plays)
+        
+        Per piece spawn, the bot chooses (rotation, column) by simulating all combinations and scoring each by:
+        
+        ```
+        score = (lines_cleared * 100) - (resulting_max_height * 5) - (holes * 10) - (bumpiness * 2)
+        ```
+        
+        - `holes` = empty cells beneath any filled cell in the same column
+        - `bumpiness` = sum of |height_col[i] - height_col[i+1]|
+        
+        Pick the highest-scoring placement. Move + rotate to that placement (server can fast-forward bot moves, no need to animate). This is the classic "Pierre Dellacherie" heuristic — well-documented online, simple to implement, beatable by a focused human.
+        
+        ## Matchmaking
+        
+        - FIFO lobby queue
+        - On new join OR every 3s: if 2 humans in queue → start session. If 1 human + 5s stable → start session, fill with bot.
+        
+        ## Camera + visuals
+        
+        Two boards side by side. Each board: 200px wide × 400px tall canvas (10×20 cells, 20px each). Player's own board on left, opponent on right.
+        
+        Above each board: display name, score, lines cleared, level. Below: small "next piece" preview.
+        
+        Color the 7 piece types differently (the usual falling-block colors: I=cyan, O=yellow, T=purple, S=green, Z=red, L=orange, J=blue).
+        
+        Garbage rows render as grey.
+        
+        Input: arrow keys (left/right move, up rotate, down soft drop, space hard drop).
+        
+        ## Acceptance — ALL must pass
+        
+        ### Build + run
+        - `dotnet build` of `Blocks.slnx` exits 0
+        - `dotnet test` exits 0 with ≥10 simulation tests passing
+        - `docker compose up` brings server up on port 5310
+        - `curl localhost:5310/health` returns 200
+        - `npm run dev` in `web/Blocks.Web/` serves the client
+        - Browser at http://localhost:5173 can: join lobby → get matched (with bot filling) → play one game → see "Game Over" screen with winner
+        
+        ### Test coverage — simulation library
+        
+        - 7-bag randomizer returns each piece type at least once per 7 spawns
+        - Piece moves left/right within bounds, blocked at walls
+        - Piece rotation respects bounds (no wall-kick required for v0)
+        - Piece locks when it can't fall further
+        - Full row clears, pieces above shift down
+        - Combo scoring (1, 2, 3, 4 lines)
+        - Garbage rows applied (3 rows from a 4-line clear)
+        - Game-over detection (piece spawns into existing block)
+        - AI bot returns a valid placement for an empty board
+        
+        ### Test coverage — integration (SignalR TestServer)
+        
+        - 2 mock SignalR clients join lobby, get matched, both receive SessionAssigned
+        - Player + bot session: bot plays autonomously, game ends with a winner
+        
+        ## Out of scope for v0
+        
+        Accounts, persistence, leaderboards, custom controls, mobile touch UI, replay, spectators, cosmetics, sound effects (silent game is OK), private rooms, room codes, T-spin scoring, wall-kicks, hold piece, B2B bonuses.
+        
+        ## Report format (when done)
+        
+        When the implementer finishes, report:
+        1. **What was built** — file list
+        2. **What tests pass** — output of `dotnet test`
+        3. **End-to-end works?** — does `docker compose up` + browser flow complete a game?
+        4. **Broken or incomplete?** — what's not working, with specificity
+    prompt: |
+      Read BUILD.md in this workspace in full — it is the
+      complete spec for the system you must build. Build
+      everything specified directly in this workspace root
+      (ignore any `games/<name>/` prefix in BUILD.md — that
+      prefix refers to where the spec was authored; for this
+      task your workspace IS that root).
+
+      Dispatch implementers as needed; you may break the
+      work into multiple dispatches if scope demands. Aim to
+      complete every acceptance criterion in BUILD.md.
+      When done, report per the 'Report format' section of
+      BUILD.md.
+    # 2026-08-24: was 3600. MEASURED: 5 of 6 tier6 runs landed in a 200s band
+    # AT OR OVER the 3600s cap (3505/3671/3673/3695/3706s) => the endpoint was
+    # SATURATED and had zero power; a cap every run hits measures the cap.
+    # armA-run2 was at 8/8 assertions when the clock killed it, 106s over.
+    # Raised WITH the implementer max_iterations 40->100 change, which makes
+    # runs longer by design; without this the other change is untestable.
+    # PREREG: if runs still saturate at 7200 the cap was NOT the constraint and
+    # this is reverted -- see PREREG-2026-08-24-cap-repair.md.
+    timeout_seconds: 7200   # 120 min hard cap
+    assertions:
+      - file: Blocks.slnx
+        exists: true
+      - file: Dockerfile
+        exists: true
+      - file: docker-compose.yml
+        exists: true
+      # --- ruler v2: BUILD.md "Acceptance / Build + run", verbatim ---
+      # "`dotnet build` of `Blocks.slnx` exits 0"
+      - run_command:
+          command: dotnet build Blocks.slnx --nologo -v quiet
+          exit_code: 0
+          timeout_seconds: 600
+      # "`dotnet test` exits 0 with >=10 simulation tests passing"
+      # min_passed also rejects the empty-test-project failure mode
+      # (g2 shipped a Tests.csproj containing zero test .cs files).
+      - dotnet_test:
+          min_passed: 10
+          max_failed: 0
+          timeout_seconds: 900
+      # "`npm run dev` in `web/Blocks.Web/` serves the client" — we
+      # assert the client COMPILES (tsc+vite build), the hermetic half.
+      #
+      # TWO TRAPS, both hit and fixed on 2026-08-24. Do not "simplify"
+      # this line back into either of them:
+      #  1. NOT the `cwd:` field. cwd goes to ProcessStartInfo.Working-
+      #     Directory, which THROWS Win32Exception out of the whole bench
+      #     run when the agent never created web/ — the common failure.
+      #  2. NOT `npm --prefix X install`. --prefix sets the install
+      #     TARGET, not the manifest location: npm reads ./package.json,
+      #     doesn't find one, and dies ENOENT (exit -4058) with EMPTY
+      #     output even on a perfect artifact. (`--prefix X run` does
+      #     work, which is what made this look correct at first.)
+      # `cd` inside the command works in both cmd.exe and bash and
+      # short-circuits to a clean nonzero when the dir is missing.
+      # Verified two-sided: exit 0 on a real client, exit 1 + diagnostic
+      # on the EMPTY web/Blocks.Web/ the Flash run actually shipped.
+      - run_command:
+          command: cd web/Blocks.Web && npm install --no-audit --no-fund && npm run build
+          exit_code: 0
+          timeout_seconds: 900
+      - no_event: malformed_tool_call
+        max_count: 10
+      - budget:
+          member_iters_max: 80
+          leader_iters_max: 40
+
+  - id: g2-panel-match-2p
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "yes"
+      ambiguity_level: "high"
+      complexity_tier: "6"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: Panel-de-Pon-style 2P puzzle game w/ AI bot fallback
+    workspace: empty-git-repo
+    seed_files:
+      BUILD.md: |
+        # Panel-Match-2P — Build Spec (one-shot)
+        
+        This document is the complete build specification. Read it in full and build the entire system in one dispatch. Do NOT check in mid-way.
+        
+        ## Vision
+        
+        Two-player online puzzle game in the classic swap-and-match block puzzle genre. Grid of colored blocks rises slowly from below; player swaps adjacent blocks with a 2-cell-wide cursor; matching 3+ same-colored blocks in a row OR column clears them; cleared blocks above fall and can trigger CHAINS (combos). Chains send garbage rows to your opponent. Lose when blocks reach the top.
+        
+        If only one human joins, AI bot fills second seat.
+        
+        ## Tech stack (non-negotiable)
+        
+        | Layer | Choice |
+        |---|---|
+        | Server | ASP.NET Core 10 + SignalR |
+        | Client | Vanilla TypeScript + Vite + HTML5 Canvas |
+        | Live game state | In-memory server-authoritative |
+        | Persistence | None for v0 |
+        | Hosting | Docker on the runner box via docker-compose |
+        | Auth | None — anonymous play with guest display name |
+        | Solution file | `.slnx` |
+        | Folder naming | lowercase-hyphenated; PascalCase only inside csproj |
+        
+        ## Solution layout (exact)
+        
+        ```
+        games/panel-match-2p/
+        ├── PanelMatch.slnx
+        ├── Dockerfile
+        ├── docker-compose.yml
+        ├── src/
+        │   └── PanelMatch.Server/              # ASP.NET Core 10
+        ├── tests/
+        │   └── PanelMatch.Server.Tests/        # xUnit
+        └── web/
+            └── PanelMatch.Web/                 # TypeScript + Vite + Canvas
+        ```
+        
+        ## Domain model
+        
+        ```csharp
+        public sealed class GameSession {
+            Guid Id;
+            IReadOnlyList<Player> Players;            // exactly 2
+            IReadOnlyDictionary<Guid, Board> Boards;
+            SessionState State;                       // Lobby | Countdown | Playing | Ended
+        }
+        
+        public sealed class Board {
+            int Width = 6;
+            int Height = 12;
+            // Grid: 0 = empty, 1-5 = block color id, 6 = garbage
+            Cell[,] Grid;
+            CursorPos Cursor;                         // 2-cell-wide cursor; tracks left cell
+            float RiseProgress;                       // 0..1; when 1.0, push new row from bottom
+            int Score;
+            int CurrentChainLength;                   // running chain depth from last clear
+            bool IsGameOver;
+            int PendingGarbageRows;                   // queued from opponent, applied between rises
+        }
+        
+        public sealed class Player {
+            Guid Id;
+            string DisplayName;
+            PlayerKind Kind;                          // Human | AiBot
+            string? ConnectionId;
+        }
+        ```
+        
+        ## SignalR messages
+        
+        ### Client → Server
+        
+        | Method | Args | Purpose |
+        |---|---|---|
+        | `JoinLobby` | `{displayName}` | Join queue |
+        | `SubmitInput` | `{sessionId, action: "MoveLeft" \| "MoveRight" \| "MoveUp" \| "MoveDown" \| "Swap" \| "ForceRise"}` | Per-input action |
+        | `LeaveSession` | `{sessionId}` | Voluntary exit |
+        
+        ### Server → Client
+        
+        | Method | Args | Rate |
+        |---|---|---|
+        | `LobbyState` | `{playersInLobby}` | 1Hz |
+        | `SessionAssigned` | `{sessionId, players, yourPlayerId}` | on match |
+        | `CountdownTick` | `{sessionId, secondsRemaining}` | 3-2-1-GO |
+        | `BoardState` | `{sessionId, boards: {playerId: BoardSnapshot}}` | on every state change (swap, clear, fall, garbage) |
+        | `GameEnded` | `{sessionId, winner?, scoreboard}` | on round end |
+        
+        ## Game rules
+        
+        - Board: **6 wide × 12 tall.** Cells store colors 1-5 (5 distinct colors) or 6 (garbage).
+        - Rise: every ~5 seconds, push a new row of random colors up from the bottom. All existing blocks shift up. If any block reaches row 0 (top), game over.
+        - Cursor: 2 cells wide (highlights two horizontally-adjacent cells). Moves with arrow keys. Cannot go off-grid.
+        - Swap action: swaps the two highlighted cells. Always succeeds (even if one or both are empty).
+        - Match detection after swap (or after falls): scan grid for runs of 3+ same color in a row OR column. Mark all matched cells.
+        - Clear: matched cells disappear (set to empty).
+        - Fall: blocks above empty cells fall to fill the gaps.
+        - Chain: if a fall creates new matches, increment chain length and repeat. Chain ends when a fall settles without new matches.
+        - Scoring: each clear scores `cells_cleared * 10 * chain_length`. Bigger chains = exponentially more points.
+        - **Garbage system: chains of length 2+ send garbage to opponent.** Garbage rows = (chain_length − 1). Garbage = solid rows of color 6 that count toward Game Over but can be CONVERTED back to playable blocks when an adjacent match clears (any match touching a garbage row converts the entire garbage row to random regular colors).
+        - Force-rise: hold a key to instantly push the next row up (so you can clear faster when you're winning).
+        
+        ## AI bot
+        
+        Per tick (decision rate ~2Hz so the bot doesn't feel instantaneous):
+        
+        1. Scan grid for the highest "imminent match" opportunity — pairs of same-color blocks 1 swap away from forming a 3-match.
+        2. If found: move cursor to that position, perform swap.
+        3. Else: move cursor toward the column with the tallest stack and perform a swap there to disrupt it.
+        
+        Deterministic. Slower than top human play (humans can plan chains). Adequate for v0.
+        
+        ## Visuals + input
+        
+        Two boards side by side. Each board: 240px wide × 480px tall canvas (6×12 cells, 40px each). Player's own on left, opponent on right.
+        
+        Above each board: display name, score, chain indicator (if active). Below: nothing for v0.
+        
+        Block colors (the usual swap-puzzle palette):
+        - 1=red, 2=cyan, 3=yellow, 4=green, 5=purple, 6=grey (garbage)
+        
+        Cursor: white outline around 2 highlighted cells.
+        
+        Input: arrow keys move cursor, space swaps, shift force-rises.
+        
+        ## Acceptance — ALL must pass
+        
+        ### Build + run
+        - `dotnet build` of `PanelMatch.slnx` exits 0
+        - `dotnet test` exits 0 with ≥10 simulation tests passing
+        - `docker compose up` brings server up on port 5320
+        - `curl localhost:5320/health` returns 200
+        - `npm run dev` in `web/PanelMatch.Web/` serves the client
+        - Browser at http://localhost:5173 can: join lobby → get matched (with bot filling) → play one game → see "Game Over" screen
+        
+        ### Test coverage — simulation library
+        
+        - 3-in-a-row horizontal match detected
+        - 3-in-a-row vertical match detected
+        - Swap that creates a match → cells clear
+        - Chain: clear → fall → new match → chain_length=2 → more cells clear
+        - Game-over: block reaches top row
+        - Rise: row pushed up, existing blocks shift, top-out checked
+        - Garbage row applied when opponent triggers chain
+        - AI bot returns a valid (cursor_pos, action) for a non-trivial board
+        
+        ### Test coverage — integration (SignalR TestServer)
+        
+        - 2 mock SignalR clients join lobby, get matched, both receive SessionAssigned
+        - Player + bot session: bot plays autonomously, game ends with a winner
+        
+        ## Out of scope for v0
+        
+        Accounts, persistence, leaderboards, mobile touch UI, replay, spectators, cosmetics, sound, private rooms, special block types (panel ⅓, ⅔ blocks), countdown-to-action animations, network rollback.
+        
+        ## Report format
+        
+        1. What was built (file list)
+        2. What tests pass (`dotnet test` output)
+        3. End-to-end works? (`docker compose up` + browser flow)
+        4. Broken or incomplete? (specificity)
+    prompt: |
+      Read BUILD.md in this workspace in full — it is the
+      complete spec for the system you must build. Build
+      everything specified directly in this workspace root
+      (ignore any `games/<name>/` prefix in BUILD.md — that
+      prefix refers to where the spec was authored; for this
+      task your workspace IS that root).
+
+      Dispatch implementers as needed; you may break the
+      work into multiple dispatches if scope demands. Aim to
+      complete every acceptance criterion in BUILD.md.
+      When done, report per the 'Report format' section of
+      BUILD.md.
+    # 2026-08-24: was 3600. MEASURED: 5 of 6 tier6 runs landed in a 200s band
+    # AT OR OVER the 3600s cap (3505/3671/3673/3695/3706s) => the endpoint was
+    # SATURATED and had zero power; a cap every run hits measures the cap.
+    # armA-run2 was at 8/8 assertions when the clock killed it, 106s over.
+    # Raised WITH the implementer max_iterations 40->100 change, which makes
+    # runs longer by design; without this the other change is untestable.
+    # PREREG: if runs still saturate at 7200 the cap was NOT the constraint and
+    # this is reverted -- see PREREG-2026-08-24-cap-repair.md.
+    timeout_seconds: 7200   # 120 min hard cap
+    assertions:
+      - file: PanelMatch.slnx
+        exists: true
+      - file: Dockerfile
+        exists: true
+      - file: docker-compose.yml
+        exists: true
+      # --- ruler v2: BUILD.md "Acceptance / Build + run", verbatim ---
+      # "`dotnet build` of `PanelMatch.slnx` exits 0"
+      - run_command:
+          command: dotnet build PanelMatch.slnx --nologo -v quiet
+          exit_code: 0
+          timeout_seconds: 600
+      # "`dotnet test` exits 0 with >=10 simulation tests passing"
+      - dotnet_test:
+          min_passed: 10
+          max_failed: 0
+          timeout_seconds: 900
+      # "`npm run dev` in `web/PanelMatch.Web/` serves the client" — we
+      # assert the client COMPILES, the hermetic half.
+      # Do NOT rewrite as `cwd:` (throws Win32Exception out of the bench
+      # run when web/ is missing) or as `npm --prefix X install` (--prefix
+      # is the install TARGET, not the manifest dir: ENOENT -4058 with
+      # empty output even on a good artifact). See g1 for the full note.
+      - run_command:
+          command: cd web/PanelMatch.Web && npm install --no-audit --no-fund && npm run build
+          exit_code: 0
+          timeout_seconds: 900
+      - no_event: malformed_tool_call
+        max_count: 10
+      - budget:
+          member_iters_max: 80
+          leader_iters_max: 40
+
+  - id: g3-cycle-arena-4p
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "yes"
+      ambiguity_level: "high"
+      complexity_tier: "6"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: Cycle-Arena 4P online HTML game w/ AI bot fallback
+    workspace: empty-git-repo
+    seed_files:
+      BUILD.md: |
+        # Cycle-Arena — Build Spec (one-shot)
+        
+        This document is the complete build specification for Cycle-Arena. The agent should read this file in full and build the entire system in one dispatch, then report results. Do NOT check in mid-way.
+        
+        ## Vision
+        
+        Multiplayer real-time light-cycle game. 4 players per arena ride bikes that leave a glowing wall behind them; they die if they hit any wall (their own, another bike's, or the arena boundary). Last bike alive wins. Default camera looks straight down (so it LOOKS like a classic 2D light-cycle game); user can tilt the camera with mouse drag (0°–60° from vertical) to reveal that the world is fully 3D — bikes and walls are extruded geometry. The tilt-reveal is the visual differentiator.
+        
+        ## Tech stack (non-negotiable)
+        
+        | Layer | Choice |
+        |---|---|
+        | Server | ASP.NET Core 10 + SignalR |
+        | Client | Babylon.js 8 in vanilla TypeScript + Vite (no React/Vue) |
+        | Persistence | PostgreSQL on the runner box (host old-runner, port 5437, database `cycles`, user/password from env vars) |
+        | Live game state | In-memory on server (NOT in Postgres) |
+        | Hosting | Docker on the runner box via docker-compose |
+        | Auth | None for v0 — anonymous play with guest display names |
+        | Solution file | `.slnx` (NOT `.sln`) |
+        | Folder names | lowercase-hyphenated |
+        | Project names | PascalCase in .NET csproj |
+        | Project subfolders | `src/`, `tests/`, `docs/` |
+        | Tick rate | 20Hz simulation. 20Hz full-state broadcast (no delta state v0) |
+        | Architecture | Server-authoritative (no client prediction in v0) |
+        
+        ## Solution layout (exact)
+        
+        ```
+        games/cycle-arena/
+        ├── Cycles.slnx
+        ├── Dockerfile
+        ├── docker-compose.yml
+        ├── src/
+        │   └── Cycles.Server/             # ASP.NET Core 10
+        ├── tests/
+        │   └── Cycles.Server.Tests/       # xUnit
+        └── web/
+            └── Cycles.Web/                # TypeScript + Vite + Babylon.js
+        ```
+        
+        ## Domain model
+        
+        Integer grid (NOT floating point). Bikes turn 90° only (4 directions: N/E/S/W). Bikes advance 1 cell per tick. Arena is 100×100 cells.
+        
+        ```csharp
+        public sealed class GameSession {
+            Guid Id;
+            ArenaConfig Arena;
+            IReadOnlyList<Player> Players;   // exactly 4
+            SessionState State;              // Lobby | Countdown | Round | Break | Ended
+        }
+        
+        public sealed class Player {
+            Guid Id;
+            string DisplayName;
+            PlayerKind Kind;                 // Human | AiBot
+            Color TrailColor;                // persistent per player (anonymous-but-stable)
+            string? ConnectionId;            // null for AI
+        }
+        
+        public sealed class Bike {
+            Guid PlayerId;
+            GridPosition Position;
+            Direction Facing;
+            bool IsAlive;
+        }
+        
+        public sealed class Wall {
+            Guid OwnerPlayerId;
+            IReadOnlyList<GridPosition> Cells;
+        }
+        
+        public sealed class Arena {
+            int Width;
+            int Height;
+            IReadOnlyList<Wall> Walls;
+        }
+        ```
+        
+        ## SignalR messages
+        
+        ### Client → Server
+        
+        | Method | Args |
+        |---|---|
+        | `JoinLobby` | `{displayName}` |
+        | `SubmitInput` | `{sessionId, turn: "Left" \| "Right" \| "None"}` |
+        | `LeaveSession` | `{sessionId}` |
+        
+        ### Server → Client
+        
+        | Method | Args | Rate |
+        |---|---|---|
+        | `LobbyState` | `{playersInLobby, sessionsRunning, yourEta}` | 1Hz to lobby members |
+        | `SessionAssigned` | `{sessionId, players, arena, yourPlayerId}` | on match |
+        | `CountdownTick` | `{sessionId, secondsRemaining}` | 3-2-1-GO before round |
+        | `GameState` | `{sessionId, tick, bikes[], newWallCells[], deaths[]}` | 20Hz during round |
+        | `RoundEnded` | `{sessionId, winner?, scoreboard, breakSecondsRemaining}` | on round end |
+        | `SessionEnded` | `{sessionId, finalScoreboard}` | on session dispose |
+        
+        ## Session lifecycle
+        
+        ```
+        [Lobby] → [Countdown 3s] → [Round] → [Break 10s + scoreboard] → [Ended; session disposed]
+        ```
+        
+        **ONE round per session.** After the break, the session disposes. Player sees a "Play again" button; clicking re-joins the lobby queue. **NO auto-requeue. NO best-of-N matches.** Players stay in control of their time.
+        
+        **Round end:** 1 bike alive OR all dead OR 60 seconds elapsed (timeout = draw, no winner).
+        
+        ## Matchmaking (public lobby only)
+        
+        `GameSessionManager`:
+        - FIFO lobby queue
+        - Every 3 seconds OR on new join, try to fill a session:
+          - If lobby has ≥4 humans → start session with 4 humans
+          - If lobby has 1–3 humans AND no new join in last 5s → fill with AI bots to 4
+          - If 0 humans → no session
+        - Sessions run in parallel, each in its own SignalR group `session-{guid}`
+        - No hard cap on concurrent sessions
+        - **No private rooms. No room codes.**
+        
+        ## AI bot (medium difficulty, deterministic)
+        
+        Per tick, decide turn:
+        1. Look 1 cell ahead in current direction. If empty → continue straight.
+        2. If blocked → flood-fill the open area to LEFT and to RIGHT. Choose the side with the larger open area. If equal, continue straight (no jitter).
+        3. If all sides blocked → continue straight (die).
+        
+        No deeper lookahead. Beatable by an attentive human.
+        
+        ## Camera + visuals
+        
+        **Default camera:** orthographic, straight down at XZ floor plane (looks like a 2D light-cycle game at first glance).
+        
+        **Tilt:** mouse drag (desktop) or two-finger drag (touch) tilts camera 0°–60° from vertical. Reveals 3D: blocky bike models, 1-unit-tall emissive wall ribbons, glowing wireframe arena boundary.
+        
+        **Style:** dark floor with subtle neon grid (1-unit cells), emissive bike + wall colors matching player's TrailColor, bloom post-process on. Death = brief explosion particle + bike fades out.
+        
+        **Persistent TrailColor:** anonymous-but-stable, keyed off `DisplayName` + a stable client ID stored in `localStorage`.
+        
+        ## Acceptance — ALL must pass
+        
+        ### Build + run
+        
+        - `dotnet build` of `Cycles.slnx` exits 0
+        - `dotnet test` exits 0 with **≥15 simulation tests passing**
+        - `docker compose up` brings server up on port 5300
+        - `curl localhost:5300/health` returns 200
+        - `npm run dev` in `web/Cycles.Web/` serves the client
+        - Browser at http://localhost:5173 can: join lobby → get matched (with bots filling) → play one round → see "Play again" button after break
+        
+        ### Test coverage — simulation library
+        
+        - collision with own wall
+        - collision with another bike's wall
+        - collision with arena boundary
+        - head-on collision (both die)
+        - 4-bike free-for-all completes
+        - round-end detection: 1 alive, all dead, 60s timeout
+        - AI bot deterministic behavior
+        
+        ### Test coverage — integration (SignalR TestServer)
+        
+        - 4 mock SignalR clients join lobby, get matched, advance one round to `RoundEnded`
+        - Multiple sessions can run in parallel (8 mock clients → 2 sessions)
+        - Player joining when lobby has 1–3 humans + 5s idle → AI bots fill the session
+        
+        ### Persistence
+        
+        - Match results persist to Postgres on the runner box:5437
+        - Per-player TrailColor is stable across sessions (same `DisplayName` + clientId → same color)
+        
+        ## Out of scope for v0
+        
+        Player accounts/auth, mobile native client, custom arena layouts, power-ups, weapons, jump, spectator mode, cosmetics, private rooms, room codes, replay system, client prediction, delta state, best-of-N matches.
+        
+        ## Report format (when done)
+        
+        When the implementer finishes, the leader should report:
+        
+        1. **What was built** — file list
+        2. **What tests pass** — output of `dotnet test`
+        3. **End-to-end works?** — does `docker compose up` + browser flow complete a round?
+        4. **Broken or incomplete?** — what's not working, with as much specificity as possible
+    prompt: |
+      Read BUILD.md in this workspace in full — it is the
+      complete spec for the system you must build. Build
+      everything specified directly in this workspace root
+      (ignore any `games/<name>/` prefix in BUILD.md — that
+      prefix refers to where the spec was authored; for this
+      task your workspace IS that root).
+
+      Dispatch implementers as needed; you may break the
+      work into multiple dispatches if scope demands. Aim to
+      complete every acceptance criterion in BUILD.md.
+      When done, report per the 'Report format' section of
+      BUILD.md.
+    # 2026-08-24: was 3600. MEASURED: 5 of 6 tier6 runs landed in a 200s band
+    # AT OR OVER the 3600s cap (3505/3671/3673/3695/3706s) => the endpoint was
+    # SATURATED and had zero power; a cap every run hits measures the cap.
+    # armA-run2 was at 8/8 assertions when the clock killed it, 106s over.
+    # Raised WITH the implementer max_iterations 40->100 change, which makes
+    # runs longer by design; without this the other change is untestable.
+    # PREREG: if runs still saturate at 7200 the cap was NOT the constraint and
+    # this is reverted -- see PREREG-2026-08-24-cap-repair.md.
+    timeout_seconds: 7200   # 120 min hard cap
+    assertions:
+      - file: Cycles.slnx
+        exists: true
+      - file: Dockerfile
+        exists: true
+      - file: docker-compose.yml
+        exists: true
+      # --- ruler v2: BUILD.md "Acceptance / Build + run", verbatim ---
+      # "`dotnet build` of `Cycles.slnx` exits 0"
+      - run_command:
+          command: dotnet build Cycles.slnx --nologo -v quiet
+          exit_code: 0
+          timeout_seconds: 600
+      # "`dotnet test` exits 0 with >=15 simulation tests passing"
+      # NOTE 15, not 10 — g3's BUILD.md asks for more. The
+      # 2026-08-24 g3 run delivered exactly 1 test and was scored
+      # PASS on all three existence assertions.
+      - dotnet_test:
+          min_passed: 15
+          max_failed: 0
+          timeout_seconds: 900
+      # "`npm run dev` in `web/Cycles.Web/` serves the client".
+      # The 2026-08-24 g3 run shipped NO client code at all; this
+      # assertion is what would have caught that.
+      # Do NOT rewrite as `cwd:` (throws Win32Exception out of the bench
+      # run when web/ is missing) or as `npm --prefix X install` (--prefix
+      # is the install TARGET, not the manifest dir: ENOENT -4058 with
+      # empty output even on a good artifact). See g1 for the full note.
+      - run_command:
+          command: cd web/Cycles.Web && npm install --no-audit --no-fund && npm run build
+          exit_code: 0
+          timeout_seconds: 900
+      - no_event: malformed_tool_call
+        max_count: 10
+      - budget:
+          member_iters_max: 80
+          leader_iters_max: 40
+

@@ -1,0 +1,333 @@
+name: team-chain-calculator
+description: |
+  Q3 chained-task experiment (Chain-A: Calculator).
+
+  Each of the 10 instances is one step in an incrementally-built
+  Calculator class. Instances 2-10 are designed to be run with
+  `--workspace-dir <chain-dir>` adopting the prior step's workspace.
+  Only step 1 seeds the workspace; subsequent steps assume the
+  previous step's outputs.
+
+  The orchestrator (`scripts/chain-runner.sh`) is responsible
+  for:
+    1. Creating the workspace and seeding step 1's files.
+    2. After step N completes, writing the next StepN+1_Tests.cs
+       file (NOT in this YAML — the runner has the test bodies inline
+       so each step can be validated in isolation).
+    3. Running `vett team-bench team-chain-calculator -i step-N
+       --workspace-dir <dir>` for each step.
+    4. Recording pass/fail per step + cumulative metrics.
+
+  See `scripts/chain-runner.sh` for the actual chain
+  pipeline. This YAML only defines the PROMPTS + ASSERTIONS per step.
+  Tests are written by the runner, not by seed_files (since
+  --workspace-dir skips seed_files).
+
+  Run via runner:
+    bash scripts/chain-runner.sh
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  # ============================================================
+  # step-1 — Create Calculator class with Add
+  # SEEDS THE WORKSPACE — this is the only step with seed_files.
+  # ============================================================
+  - id: step-1-add
+    taxonomy: &chain_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Chain step 1 — create Calculator class with Add method.
+    workspace: empty-git-repo
+    seed_files:
+      Calculator.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Calc</RootNamespace>
+            <AssemblyName>Calc</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Step1_Tests.cs: |
+        namespace Calc;
+
+        public class Step1_Tests
+        {
+            [Fact] public void Add_Two_Positives() => Assert.Equal(5, new Calculator().Add(2, 3));
+            [Fact] public void Add_With_Zero()    => Assert.Equal(7, new Calculator().Add(7, 0));
+            [Fact] public void Add_With_Negative() => Assert.Equal(-1, new Calculator().Add(2, -3));
+        }
+    prompt: |
+      Create a `Calculator` class in `Calculator.cs` (namespace `Calc`)
+      with an `Add(int a, int b)` method returning `a + b`.
+
+      Run `dotnet test`. All 3 tests in `Step1_Tests` must pass.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 3
+          max_failed: 0
+      - file: Calculator.cs
+        exists: true
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  # ============================================================
+  # step-2 — Add Subtract method
+  # ============================================================
+  - id: step-2-subtract
+    taxonomy: *chain_tax
+    description: |
+      Chain step 2 — add Subtract. Step1 tests must still pass.
+    workspace: empty-git-repo
+    prompt: |
+      The `Calculator` class in this workspace already has an `Add`
+      method (and Step1's tests pass). Add a `Subtract(int a, int b)`
+      method that returns `a - b`.
+
+      Step2's tests are in `Step2_Tests.cs`. ALL prior step tests
+      (Step1, Step2) must continue passing. Run `dotnet test`.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 6
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Subtract'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  - id: step-3-multiply
+    taxonomy: *chain_tax
+    description: |
+      Chain step 3 — add Multiply. Steps 1-2 must still pass.
+    workspace: empty-git-repo
+    prompt: |
+      Add `Multiply(int a, int b)` returning `a * b`. Prior step tests
+      (Step1, Step2, Step3) must all pass. Run `dotnet test`.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 9
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Multiply'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  - id: step-4-divide
+    taxonomy: *chain_tax
+    description: |
+      Chain step 4 — add Divide with zero-check throw.
+    workspace: empty-git-repo
+    prompt: |
+      Add `Divide(int a, int b)` returning `a / b`. If `b == 0` throw
+      `DivideByZeroException`. Prior tests + new Step4 tests pass.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 13
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Divide'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  - id: step-5-power
+    taxonomy: *chain_tax
+    description: |
+      Chain step 5 — add integer Power (non-negative exponent).
+    workspace: empty-git-repo
+    prompt: |
+      Add `Power(int base, int exp)` returning `base^exp` (use a loop,
+      `exp >= 0`). All prior tests + Step5 tests must pass. Dispatch
+      an implementer. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 17
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Power'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 24
+          leader_iters_max: 18
+
+  - id: step-6-memory
+    taxonomy: *chain_tax
+    description: |
+      Chain step 6 — add LastResult memory; every op updates it.
+    workspace: empty-git-repo
+    prompt: |
+      Add a public property `LastResult` (int, defaults to 0) that is
+      set to the result of every successful operation
+      (Add/Subtract/Multiply/Divide/Power). Failed Divide (b==0) does
+      NOT update LastResult. All prior + Step6 tests must pass.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 420
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 21
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'LastResult'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 26
+          leader_iters_max: 20
+
+  - id: step-7-clear
+    taxonomy: *chain_tax
+    description: |
+      Chain step 7 — add Clear() to reset state.
+    workspace: empty-git-repo
+    prompt: |
+      Add a `Clear()` method that resets `LastResult` to 0. All prior
+      tests + Step7 tests must pass. Dispatch an implementer.
+      Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 24
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Clear'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  - id: step-8-history
+    taxonomy: *chain_tax
+    description: |
+      Chain step 8 — add History list of formatted operation entries.
+    workspace: empty-git-repo
+    prompt: |
+      Add a `History` property of type `IReadOnlyList<string>`. Every
+      successful operation appends `"{Op}({a},{b})={result}"` (e.g.
+      `"Add(2,3)=5"`). Failed Divide does NOT append. `Clear()` also
+      empties History. All prior + Step8 tests must pass.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 28
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'History'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 22
+
+  - id: step-9-undo
+    taxonomy: *chain_tax
+    description: |
+      Chain step 9 — UndoLast() pops history + restores LastResult.
+    workspace: empty-git-repo
+    prompt: |
+      Add `UndoLast()` method. Removes the last History entry. After
+      undo, `LastResult` should equal whatever the second-to-last
+      operation's result was (parse from history) — or 0 if history
+      is now empty. If history was empty before the call, `UndoLast()`
+      is a no-op. All prior + Step9 tests must pass.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 32
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'UndoLast'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 36
+          leader_iters_max: 24
+
+  - id: step-10-refactor
+    taxonomy: *chain_tax
+    description: |
+      Chain step 10 — refactor: extract result-recording into a private
+      helper. Behavior unchanged; tests still pass.
+    workspace: empty-git-repo
+    prompt: |
+      Refactor `Calculator` to extract the common pattern of "update
+      LastResult and append to History" into a private helper method
+      like `private int Record(string op, int a, int b, int result)`.
+      Every public arithmetic op (Add/Subtract/Multiply/Divide/Power)
+      should call this helper before returning. Behavior MUST be
+      identical — every prior test continues passing. Step10 has no
+      new tests; the regression-suite IS the test.
+      Dispatch an implementer. Accept_dispatch.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 32
+          max_failed: 0
+      - file: Calculator.cs
+        content_matches: 'Record'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 32
+          leader_iters_max: 22

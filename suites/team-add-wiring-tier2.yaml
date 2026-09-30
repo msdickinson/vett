@@ -1,0 +1,416 @@
+name: team-add-wiring-tier2
+description: |
+  A8 — Add Wiring. Small new file + wire it into an existing
+  composition point (DI container, config binding, route registration).
+  Distinct from A4 multi-file features because the "wire-up" piece
+  is the load-bearing change, not the feature itself.
+
+  Augments `team-aspnet-tier2` (3 instances: DI register, validator,
+  controller) with 3 more wiring patterns.
+
+  Run: vett team-bench team-add-wiring-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # aw1 — Bind options class from appsettings.json
+  # ============================================================
+  - id: aw1-bind-options
+    taxonomy: &a8_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A8 — Add a `RateLimitOptions` class + bind it from a "RateLimit"
+      config section + register so `IOptions<RateLimitOptions>` is
+      resolvable from DI. Tests use a ConfigurationBuilder to verify.
+    workspace: empty-git-repo
+    seed_files:
+      Wiring.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Wiring</RootNamespace>
+            <AssemblyName>Wiring</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+            <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
+            <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
+            <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" />
+            <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+            <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
+            <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Composition.cs: |
+        using Microsoft.Extensions.Configuration;
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace Wiring;
+
+        public static class Composition
+        {
+            // Extension method the test will call. Today it's a stub.
+            // The agent must bind RateLimitOptions from a "RateLimit" section.
+            public static IServiceCollection AddDomainServices(this IServiceCollection services, IConfiguration config)
+            {
+                // TODO: wire RateLimitOptions
+                return services;
+            }
+        }
+      Composition_Tests.cs: |
+        using Microsoft.Extensions.Configuration;
+        using Microsoft.Extensions.DependencyInjection;
+        using Microsoft.Extensions.Options;
+
+        namespace Wiring;
+
+        public class Composition_Tests
+        {
+            private static IServiceProvider Build()
+            {
+                var json = """
+                    { "RateLimit": { "RequestsPerMinute": 120, "BurstSize": 30 } }
+                    """;
+                var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+                var config = new ConfigurationBuilder()
+                    .AddJsonStream(new MemoryStream(bytes))
+                    .Build();
+                var sp = new ServiceCollection().AddDomainServices(config).BuildServiceProvider();
+                return sp;
+            }
+
+            [Fact] public void Options_Resolves()
+            {
+                var opts = Build().GetRequiredService<IOptions<RateLimitOptions>>();
+                Assert.NotNull(opts.Value);
+            }
+
+            [Fact] public void Options_RequestsPerMinute_Bound()
+            {
+                var v = Build().GetRequiredService<IOptions<RateLimitOptions>>().Value;
+                Assert.Equal(120, v.RequestsPerMinute);
+            }
+
+            [Fact] public void Options_BurstSize_Bound()
+            {
+                var v = Build().GetRequiredService<IOptions<RateLimitOptions>>().Value;
+                Assert.Equal(30, v.BurstSize);
+            }
+
+            [Fact] public void Options_TypeShape()
+            {
+                var t = typeof(RateLimitOptions);
+                Assert.NotNull(t.GetProperty("RequestsPerMinute"));
+                Assert.NotNull(t.GetProperty("BurstSize"));
+            }
+        }
+    prompt: |
+      The workspace has a `Composition.AddDomainServices(services, config)`
+      extension method that's stubbed. Tests want it to bind a new
+      `RateLimitOptions { RequestsPerMinute, BurstSize }` from the
+      `"RateLimit"` section of config and register so
+      `IOptions<RateLimitOptions>` is resolvable.
+
+      Dispatch an implementer to:
+        1. Create `RateLimitOptions.cs` with `RequestsPerMinute` (int)
+           and `BurstSize` (int) properties.
+        2. Update `Composition.AddDomainServices` to call
+           `services.Configure<RateLimitOptions>(config.GetSection("RateLimit"))`.
+
+      Two files: one new (`RateLimitOptions.cs`) + one edited
+      (`Composition.cs`). 4 tests should pass. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: RateLimitOptions.cs
+        exists: true
+      - file: Composition.cs
+        content_matches: 'RateLimitOptions'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  # ============================================================
+  # aw2 — Register a decorator over an existing interface
+  # ============================================================
+  - id: aw2-add-logging-decorator
+    taxonomy: *a8_tax
+    description: |
+      A8 — Add a `LoggingPaymentProcessor` decorator + register so
+      `IPaymentProcessor` resolves to the decorator wrapping the
+      existing `StubPaymentProcessor`. Tests verify the call passes
+      through AND the log was written.
+    workspace: empty-git-repo
+    seed_files:
+      Decorator.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Decorator</RootNamespace>
+            <AssemblyName>Decorator</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+            <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      IPaymentProcessor.cs: |
+        namespace Decorator;
+
+        public interface IPaymentProcessor
+        {
+            string Charge(decimal amount);
+        }
+      StubPaymentProcessor.cs: |
+        namespace Decorator;
+
+        public class StubPaymentProcessor : IPaymentProcessor
+        {
+            public string Charge(decimal amount) => $"charged:{amount}";
+        }
+      ILogSink.cs: |
+        namespace Decorator;
+
+        public interface ILogSink
+        {
+            void Write(string line);
+        }
+      InMemoryLog.cs: |
+        namespace Decorator;
+
+        public class InMemoryLog : ILogSink
+        {
+            public List<string> Lines { get; } = new();
+            public void Write(string line) => Lines.Add(line);
+        }
+      Composition.cs: |
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace Decorator;
+
+        public static class Composition
+        {
+            // Today: registers the stub. Agent must wrap it with a
+            // LoggingPaymentProcessor decorator + keep the stub as the
+            // inner.
+            public static IServiceCollection AddPayments(this IServiceCollection services)
+            {
+                services.AddSingleton<ILogSink, InMemoryLog>();
+                services.AddSingleton<IPaymentProcessor, StubPaymentProcessor>();
+                return services;
+            }
+        }
+      Composition_Tests.cs: |
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace Decorator;
+
+        public class Composition_Tests
+        {
+            [Fact] public void Resolves_AsPaymentProcessor()
+            {
+                var sp = new ServiceCollection().AddPayments().BuildServiceProvider();
+                var p = sp.GetRequiredService<IPaymentProcessor>();
+                Assert.NotNull(p);
+            }
+            [Fact] public void Charge_ReturnsStubResult()
+            {
+                var sp = new ServiceCollection().AddPayments().BuildServiceProvider();
+                Assert.Equal("charged:50", sp.GetRequiredService<IPaymentProcessor>().Charge(50m));
+            }
+            [Fact] public void Charge_LogsEntry()
+            {
+                var sp = new ServiceCollection().AddPayments().BuildServiceProvider();
+                sp.GetRequiredService<IPaymentProcessor>().Charge(50m);
+                var log = sp.GetRequiredService<ILogSink>() as InMemoryLog;
+                Assert.NotNull(log);
+                Assert.Single(log!.Lines);
+                Assert.Contains("50", log.Lines[0]);
+            }
+            [Fact] public void Decorator_WrapsStub()
+            {
+                var sp = new ServiceCollection().AddPayments().BuildServiceProvider();
+                var p = sp.GetRequiredService<IPaymentProcessor>();
+                Assert.IsType<LoggingPaymentProcessor>(p);
+            }
+        }
+    prompt: |
+      The workspace has `IPaymentProcessor` + `StubPaymentProcessor` +
+      `ILogSink`/`InMemoryLog`. The tests expect `IPaymentProcessor`
+      to resolve to a `LoggingPaymentProcessor` that wraps the stub and
+      writes a line to `ILogSink` on each `Charge`.
+
+      Dispatch an implementer to:
+        1. Create `LoggingPaymentProcessor.cs` implementing
+           `IPaymentProcessor`, taking an inner `IPaymentProcessor` and
+           an `ILogSink` in the constructor. `Charge` writes a log line
+           containing the amount, then delegates to the inner processor
+           and returns its result.
+        2. Update `Composition.AddPayments` so resolving
+           `IPaymentProcessor` returns a `LoggingPaymentProcessor`
+           wrapping the existing `StubPaymentProcessor`. The simplest
+           way: register `StubPaymentProcessor` as a concrete type, then
+           register `IPaymentProcessor` with a factory that builds the
+           decorator.
+
+      Two files: one new (`LoggingPaymentProcessor.cs`) + one edited
+      (`Composition.cs`). 4 tests should pass. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: LoggingPaymentProcessor.cs
+        exists: true
+      - file: Composition.cs
+        content_matches: 'LoggingPaymentProcessor'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  # ============================================================
+  # aw3 — Add health-check endpoint to existing minimal API
+  # ============================================================
+  - id: aw3-add-health-check
+    taxonomy: *a8_tax
+    description: |
+      A8 — Add a `MapHealthChecks("/health")` wire-up to an existing
+      minimal-API Program.cs that returns 200 + JSON status. Tests use
+      `WebApplicationFactory` to assert the endpoint works.
+    workspace: empty-git-repo
+    seed_files:
+      Api/Api.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk.Web">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Api</RootNamespace>
+            <AssemblyName>Api</AssemblyName>
+          </PropertyGroup>
+        </Project>
+      Api/Program.cs: |
+        // Minimal API host with one existing endpoint. Agent must add
+        // a health-check pipeline + map /health.
+        var builder = WebApplication.CreateBuilder(args);
+        var app = builder.Build();
+        app.MapGet("/", () => "hello");
+        app.Run();
+
+        // Make Program discoverable to WebApplicationFactory<Program> in tests.
+        public partial class Program { }
+      Api.Tests/Api.Tests.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Api.Tests</RootNamespace>
+            <AssemblyName>Api.Tests</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+            <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+          <ItemGroup>
+            <ProjectReference Include="..\Api\Api.csproj" />
+          </ItemGroup>
+        </Project>
+      Api.Tests/HealthChecks_Tests.cs: |
+        using Microsoft.AspNetCore.Mvc.Testing;
+
+        namespace Api.Tests;
+
+        public class HealthChecks_Tests : IClassFixture<WebApplicationFactory<Program>>
+        {
+            private readonly WebApplicationFactory<Program> _factory;
+            public HealthChecks_Tests(WebApplicationFactory<Program> f) => _factory = f;
+
+            [Fact] public async Task Root_StillWorks()
+            {
+                var resp = await _factory.CreateClient().GetAsync("/");
+                resp.EnsureSuccessStatusCode();
+                Assert.Equal("hello", await resp.Content.ReadAsStringAsync());
+            }
+            [Fact] public async Task Health_Returns200()
+            {
+                var resp = await _factory.CreateClient().GetAsync("/health");
+                resp.EnsureSuccessStatusCode();
+            }
+            [Fact] public async Task Health_BodyContainsHealthy()
+            {
+                var resp = await _factory.CreateClient().GetAsync("/health");
+                var body = await resp.Content.ReadAsStringAsync();
+                Assert.Contains("Healthy", body, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    prompt: |
+      Two-project setup: `Api/` (Web SDK, minimal API with `/` endpoint)
+      + `Api.Tests/` (xUnit using `WebApplicationFactory<Program>`).
+
+      Tests expect a `/health` endpoint that returns 200 + a body
+      containing "Healthy".
+
+      Dispatch an implementer to update `Api/Program.cs` to:
+        1. Call `builder.Services.AddHealthChecks();` before `Build()`.
+        2. Call `app.MapHealthChecks("/health");` before `app.Run()`.
+
+      Don't break the existing `/` endpoint. Don't add new files —
+      just edit Program.cs. 3 tests should pass. Accept_dispatch.
+
+      Note: this is a 2-csproj solution (Api + Api.Tests). Dispatch
+      one implementer to handle both project files in the workspace
+      with `cd` as needed.
+    timeout_seconds: 540
+    assertions:
+      - file: Api/Program.cs
+        content_matches: 'MapHealthChecks'
+      - file: Api/Program.cs
+        content_matches: 'AddHealthChecks'
+      - dotnet_test:
+          cwd: "Api.Tests"
+          timeout_seconds: 360
+          min_passed: 3
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 26
+          leader_iters_max: 20

@@ -1,0 +1,1024 @@
+name: spec-authoring-tier0-5
+description: |
+  T0.5 — one-hop synthetic spec-authoring probes. 10 instances = 5 semantic
+  pairs, each paired 1:1 Python↔C#. Adds ONE new capability over T0: the
+  ticket describes symptoms visible in caller `f()`, but the fix belongs
+  to callee `g()`. The AI must reason across the call boundary to pick
+  the right target, then emit a diff scoped to that target.
+
+  Workspace layout per instance (unlike T0's single spec):
+    - current_spec_<caller>.json  — the function whose behavior the ticket describes
+    - current_spec_<callee>.json  — the function that actually needs the fix
+    - .groundtruth/desired_spec_<callee>.json  — ground truth (fix target only)
+    - ticket.md — describes caller symptom, does NOT name the fix location
+
+  The AI passes `target: "<name>"` on its `diff_apply` call so the server
+  loads `current_spec_<name>.json`. Backward-compatible with T0 (no target
+  → falls back to `current_spec.json`).
+
+  What T0.5 measures beyond T0:
+    - Target-selection correctness: did the AI pick the right callee?
+    - Cross-spec reasoning: did the AI leave the caller alone?
+    - Q1/Q2 tracked exactly as T0.
+
+  Advance bar to T1: Q1 ≥ 90%, Q2-semantic ≥ 80%. Below → diagnose per-
+  instance before adding more corpus.
+
+  Diff ops covered:
+    Pair 1: modify (leaf source on callee)
+    Pair 2: modify (when: threshold on handler)
+    Pair 3: add_exit + modify (null-check exit on validator)
+    Pair 4: remove_exit + add_exit (error-kind rename on helper)
+    Pair 5: add_leaf (new response field on helper)
+
+  Run:
+    vett team-bench spec-authoring-tier0-5 --profile spec-authoring-solo \
+      --keep-all-worktrees --json > t0.5.json
+  Score:
+    python spec_q1_report.py t0.5.json \
+      --out t0-5-results.md
+
+profile: spec-authoring-solo
+tier: 0
+
+instances:
+
+  # ==================================================================
+  # PAIR 1 — modify (helper leaf source)
+  # sum_bumps(items) sums bump(x); bump has an off-by-one
+  # ==================================================================
+
+  - id: sa-t0-5-py-01-helper-off-by-one
+    taxonomy:
+      language: "python"
+      spec_change_kind: "modify_leaf_source"
+      diff_size_bucket: "1"
+      pair_id: "01"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      sum_bumps(items) sums the results of bump(x). Sum comes back too
+      small — bump is off by one. Fix is on the callee.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — sum_bumps returns lower total than expected
+
+        `sum_bumps(items)` sums `bump(x)` across the list. Users report the
+        total is exactly `len(items)` lower than expected. Investigation
+        shows `sum_bumps` correctly delegates; the arithmetic error is in
+        its helper.
+
+        The helper should add 2 to each input, not 1.
+      current_spec_sum_bumps.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"sum_bumps",
+                     "inputs":[{"name":"items","type":"list<integer>"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"sum(bump(x) for x in items)",
+                                "determinism":"computed",
+                                "depends_on":["items","bump"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_bump.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_bump.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"bump","changes":[
+         {"op":"modify","path":"return_exits.always.leaves.value.source",
+          "from":"x + 1","to":"x + 2"}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  - id: sa-t0-5-cs-01-helper-off-by-one
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "modify_leaf_source"
+      diff_size_bucket: "1"
+      pair_id: "01"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      SumBumps(items) sums Bump(x). C# pair of py-01. Spec text
+      byte-identical to py-01 (language-agnostic v0.4).
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — SumBumps returns lower total than expected
+
+        `SumBumps(items)` sums `Bump(x)` across the list. Users report the
+        total is exactly `items.Count` lower than expected. Investigation
+        shows `SumBumps` correctly delegates; the arithmetic error is in
+        its helper.
+
+        The helper should add 2 to each input, not 1.
+      current_spec_sum_bumps.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"sum_bumps",
+                     "inputs":[{"name":"items","type":"list<integer>"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"sum(bump(x) for x in items)",
+                                "determinism":"computed",
+                                "depends_on":["items","bump"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_bump.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_bump.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"bump","changes":[
+         {"op":"modify","path":"return_exits.always.leaves.value.source",
+          "from":"x + 1","to":"x + 2"}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  # ==================================================================
+  # PAIR 2 — modify (handler when: threshold)
+  # handle_upload(size) routes to check_size_limit(size)
+  # ==================================================================
+
+  - id: sa-t0-5-py-02-handler-threshold
+    taxonomy:
+      language: "python"
+      spec_change_kind: "modify_when_condition"
+      diff_size_bucket: "2"
+      pair_id: "02"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      handle_upload delegates to check_size_limit; threshold is 100,
+      should be 1000. Ticket describes caller symptom.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — handle_upload rejects small files as too large
+
+        `handle_upload(size)` calls `check_size_limit(size)` and routes
+        the response. Users report files under a megabyte are getting
+        rejected. Route logic is correct; the size-limit helper is
+        checking against the wrong threshold.
+
+        The helper's threshold should be 1000, not 100.
+      current_spec_handle_upload.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"handle_upload",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"accepted","when":"check_size_limit(size) == true","returns":"string",
+             "leaves":{"value":{"source":"\"accepted\"","determinism":"constant"}}},
+            {"id":"rejected","when":"check_size_limit(size) == false","returns":"string",
+             "leaves":{"value":{"source":"\"rejected\"","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_check_size_limit.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_size_limit",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"size <= 100","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"size > 100","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_check_size_limit.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_size_limit",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"size <= 1000","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"size > 1000","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"check_size_limit","changes":[
+         {"op":"modify","path":"return_exits.pass.when",
+          "from":"size <= 100","to":"size <= 1000"},
+         {"op":"modify","path":"return_exits.fail.when",
+          "from":"size > 100","to":"size > 1000"}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  - id: sa-t0-5-cs-02-handler-threshold
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "modify_when_condition"
+      diff_size_bucket: "2"
+      pair_id: "02"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      HandleUpload delegates to CheckSizeLimit. C# pair of py-02.
+      Spec text byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — HandleUpload rejects small files as too large
+
+        `HandleUpload(size)` calls `CheckSizeLimit(size)` and routes
+        the response. Users report files under a megabyte are getting
+        rejected. Route logic is correct; the size-limit helper is
+        checking against the wrong threshold.
+
+        The helper's threshold should be 1000, not 100.
+      current_spec_handle_upload.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"handle_upload",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"accepted","when":"check_size_limit(size) == true","returns":"string",
+             "leaves":{"value":{"source":"\"accepted\"","determinism":"constant"}}},
+            {"id":"rejected","when":"check_size_limit(size) == false","returns":"string",
+             "leaves":{"value":{"source":"\"rejected\"","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_check_size_limit.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_size_limit",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"size <= 100","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"size > 100","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_check_size_limit.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_size_limit",
+                     "inputs":[{"name":"size","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"size <= 1000","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"size > 1000","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"check_size_limit","changes":[
+         {"op":"modify","path":"return_exits.pass.when",
+          "from":"size <= 100","to":"size <= 1000"},
+         {"op":"modify","path":"return_exits.fail.when",
+          "from":"size > 100","to":"size > 1000"}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  # ==================================================================
+  # PAIR 3 — add_exit + modify (validator null-check)
+  # create_user(data) calls validate_user_data(data); needs null-email exit
+  # ==================================================================
+
+  - id: sa-t0-5-py-03-validator-null-check
+    taxonomy:
+      language: "python"
+      spec_change_kind: "add_validation_branch"
+      diff_size_bucket: "2"
+      pair_id: "03"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      create_user calls validate_user_data; validator lacks a null-email
+      branch. Ticket describes crash in create_user; fix is on validator.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — create_user crashes when email is null
+
+        `create_user(data)` calls `validate_user_data(data)` and then
+        constructs the record. When `data.email == null`, the process
+        crashes deep in the validator with an unhandled null. The caller
+        correctly delegates; the validator should reject null emails
+        cleanly.
+
+        Add a validation branch: when `data.email == null`, raise
+        `invalid_argument("email required")`. The existing "ok" branch's
+        condition should tighten so it only fires when the email is
+        present.
+      current_spec_create_user.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"create_user",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"validate_user_data(data) == true","returns":"UserRecord",
+             "leaves":{"value":{"source":"new UserRecord(data.name, data.email)",
+                                "determinism":"computed",
+                                "depends_on":["data"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_validate_user_data.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"validate_user_data",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_validate_user_data.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"validate_user_data",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"null_email","when":"data.email == null","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"email required\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"data.email != null","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"validate_user_data","changes":[
+         {"op":"modify","path":"return_exits.ok.when",
+          "from":"always","to":"data.email != null"},
+         {"op":"add_exit","at":"before:ok","value":{
+           "id":"null_email","when":"data.email == null","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"email required\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  - id: sa-t0-5-cs-03-validator-null-check
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "add_validation_branch"
+      diff_size_bucket: "2"
+      pair_id: "03"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      CreateUser calls ValidateUserData. C# pair of py-03. Spec text
+      byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — CreateUser crashes when email is null
+
+        `CreateUser(data)` calls `ValidateUserData(data)` and then
+        constructs the record. When `data.Email == null`, the process
+        crashes deep in the validator with an unhandled null. The caller
+        correctly delegates; the validator should reject null emails
+        cleanly.
+
+        Add a validation branch: when `data.email == null`, raise
+        `invalid_argument("email required")`. The existing "ok" branch's
+        condition should tighten so it only fires when the email is
+        present.
+      current_spec_create_user.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"create_user",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"validate_user_data(data) == true","returns":"UserRecord",
+             "leaves":{"value":{"source":"new UserRecord(data.name, data.email)",
+                                "determinism":"computed",
+                                "depends_on":["data"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_validate_user_data.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"validate_user_data",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_validate_user_data.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"validate_user_data",
+                     "inputs":[{"name":"data","type":"UserData"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "UserData": {"kind":"record",
+                         "fields":{"name":"string","email":"string"}}
+          },
+          "return_exits": [
+            {"id":"null_email","when":"data.email == null","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"email required\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"data.email != null","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"validate_user_data","changes":[
+         {"op":"modify","path":"return_exits.ok.when",
+          "from":"always","to":"data.email != null"},
+         {"op":"add_exit","at":"before:ok","value":{
+           "id":"null_email","when":"data.email == null","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"email required\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  # ==================================================================
+  # PAIR 4 — remove_exit + add_exit (helper error-kind rename)
+  # process_payment(tx) calls check_balance(user, amount); wrong error kind
+  # ==================================================================
+
+  - id: sa-t0-5-py-04-error-kind-rename
+    taxonomy:
+      language: "python"
+      spec_change_kind: "rename_exit_change_returns"
+      diff_size_bucket: "2"
+      pair_id: "04"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      process_payment calls check_balance; check_balance raises the
+      wrong exception kind on insufficient balance. Fix is on the helper.
+      Tests id-immutability rule (rename via remove+add).
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — process_payment surfaces wrong exception on insufficient balance
+
+        `process_payment(tx)` calls `check_balance(user, amount)` and
+        propagates its exceptions. Callers see `precondition_failed`
+        when the user's balance is too low. That's semantically wrong —
+        insufficient balance is an input problem, not a precondition
+        violation. Fix is in the helper: it should raise
+        `invalid_argument("insufficient balance")` instead.
+
+        Rename the "insufficient" exit accordingly. The "ok" branch is
+        unchanged.
+      current_spec_process_payment.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"process_payment",
+                     "inputs":[{"name":"tx","type":"Transaction"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "Transaction": {"kind":"record",
+                            "fields":{"user":"User","amount":"number"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"check_balance(tx.user, tx.amount) == true","returns":"Receipt",
+             "leaves":{"value":{"source":"new Receipt(tx)","determinism":"computed",
+                                "depends_on":["tx"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_check_balance.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_balance",
+                     "inputs":[{"name":"user","type":"User"},
+                               {"name":"amount","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"insufficient","when":"user.balance < amount","returns":"raises",
+             "leaves":{"value":{"source":"raise precondition_failed(\"insufficient balance\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"user.balance >= amount","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_check_balance.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_balance",
+                     "inputs":[{"name":"user","type":"User"},
+                               {"name":"amount","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"invalid_amount","when":"user.balance < amount","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"insufficient balance\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"user.balance >= amount","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"check_balance","changes":[
+         {"op":"remove_exit","path":"return_exits.insufficient"},
+         {"op":"add_exit","at":"before:ok","value":{
+           "id":"invalid_amount","when":"user.balance < amount","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"insufficient balance\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 10
+
+  - id: sa-t0-5-cs-04-error-kind-rename
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "rename_exit_change_returns"
+      diff_size_bucket: "2"
+      pair_id: "04"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      ProcessPayment calls CheckBalance. C# pair of py-04. Spec text
+      byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — ProcessPayment surfaces wrong exception on insufficient balance
+
+        `ProcessPayment(tx)` calls `CheckBalance(user, amount)` and
+        propagates its exceptions. Callers see `precondition_failed`
+        when the user's balance is too low. That's semantically wrong —
+        insufficient balance is an input problem, not a precondition
+        violation. Fix is in the helper: it should raise
+        `invalid_argument("insufficient balance")` instead.
+
+        Rename the "insufficient" exit accordingly. The "ok" branch is
+        unchanged.
+      current_spec_process_payment.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"process_payment",
+                     "inputs":[{"name":"tx","type":"Transaction"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "Transaction": {"kind":"record",
+                            "fields":{"user":"User","amount":"number"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"check_balance(tx.user, tx.amount) == true","returns":"Receipt",
+             "leaves":{"value":{"source":"new Receipt(tx)","determinism":"computed",
+                                "depends_on":["tx"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_check_balance.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_balance",
+                     "inputs":[{"name":"user","type":"User"},
+                               {"name":"amount","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"insufficient","when":"user.balance < amount","returns":"raises",
+             "leaves":{"value":{"source":"raise precondition_failed(\"insufficient balance\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"user.balance >= amount","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_check_balance.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"check_balance",
+                     "inputs":[{"name":"user","type":"User"},
+                               {"name":"amount","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"invalid_amount","when":"user.balance < amount","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"insufficient balance\")",
+                                "determinism":"constant"}}},
+            {"id":"ok","when":"user.balance >= amount","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"check_balance","changes":[
+         {"op":"remove_exit","path":"return_exits.insufficient"},
+         {"op":"add_exit","at":"before:ok","value":{
+           "id":"invalid_amount","when":"user.balance < amount","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"insufficient balance\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 10
+
+  # ==================================================================
+  # PAIR 5 — add_leaf (helper returns new field)
+  # render_profile(user) calls get_user_summary(user); needs `active` field
+  # ==================================================================
+
+  - id: sa-t0-5-py-05-helper-new-field
+    taxonomy:
+      language: "python"
+      spec_change_kind: "add_response_field"
+      diff_size_bucket: "1"
+      pair_id: "05"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      render_profile expects `active` in the summary dict but
+      get_user_summary doesn't emit it. Fix is on the helper.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Feature — profile page missing user's active status
+
+        The profile page shows `Active: <status>` at the bottom.
+        `render_profile(user)` fetches its data from
+        `get_user_summary(user)` and passes fields through by name. The
+        page renders "Active: undefined" because the summary helper
+        doesn't include the field.
+
+        Add an `active` field to `get_user_summary`'s response, sourced
+        from `user.is_active`, deterministic from input. render_profile
+        already handles it downstream — no change needed there.
+      current_spec_render_profile.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"render_profile",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"string",
+             "leaves":{"value":{"source":"template.render(get_user_summary(user))",
+                                "determinism":"computed",
+                                "depends_on":["user"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_get_user_summary.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_get_user_summary.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]},
+               "active":{"source":"user.is_active","determinism":"input",
+                         "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"get_user_summary","changes":[
+         {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+          "value":{"source":"user.is_active","determinism":"input",
+                   "depends_on":["user"]}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8
+
+  - id: sa-t0-5-cs-05-helper-new-field
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "add_response_field"
+      diff_size_bucket: "1"
+      pair_id: "05"
+      hop_kind: "caller_symptom_callee_fix"
+    description: |
+      RenderProfile calls GetUserSummary. C# pair of py-05. Spec text
+      byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Feature — profile page missing user's active status
+
+        The profile page shows `Active: <status>` at the bottom.
+        `RenderProfile(user)` fetches its data from
+        `GetUserSummary(user)` and passes fields through by name. The
+        page renders "Active: undefined" because the summary helper
+        doesn't include the field.
+
+        Add an `active` field to `GetUserSummary`'s response, sourced
+        from `user.is_active`, deterministic from input. RenderProfile
+        already handles it downstream — no change needed there.
+      current_spec_render_profile.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"render_profile",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"string",
+             "leaves":{"value":{"source":"template.render(get_user_summary(user))",
+                                "determinism":"computed",
+                                "depends_on":["user"]}}}
+          ],
+          "external_calls": []
+        }
+      current_spec_get_user_summary.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec_get_user_summary.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]},
+               "active":{"source":"user.is_active","determinism":"input",
+                         "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","target":"get_user_summary","changes":[
+         {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+          "value":{"source":"user.is_active","determinism":"input",
+                   "depends_on":["user"]}}
+        ]}
+    prompt: |
+      Read every `current_spec_*.json` file and `ticket.md`. Identify
+      which function's spec is wrong. Emit exactly one
+      `mcp__spec_diff__diff_apply` call with `target: "<function_name>"`
+      and a diff that transforms THAT function's spec to match the ticket.
+      The other function's spec is already correct — do NOT edit it.
+      Do not read any file under `.groundtruth/`.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 8

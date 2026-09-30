@@ -1,0 +1,546 @@
+name: ds-team-flash-cloud
+description: |
+  TOPOLOGY 3-CLOUD (2026-08-26): DeepSeek-V4 FLASH for EVERY role
+  (leader, reviewer, implementer, researcher) via OpenRouter. Derived
+  mechanically from ds-team-flash.yaml -- the LOCAL all-Flash profile
+  with 5/5 team-minor-edit-tier1 and 2/2 team-fanout-tier2 behind it --
+  by changing the root `llm:` block and the compaction thresholds and
+  NOTHING ELSE. Prompts, tools, topology and max_iterations are
+  byte-identical, so this profile against ds-team-flash is a controlled
+  A/B on the backend model alone.
+
+  WHY IT EXISTS. The DGX Sparks currently serve the OLDER V4-Flash, and
+  the newer one cannot be downloaded until ~2026-08-31 (Mark: "DGX
+  sparks only have OLD version of Deepseek 4 right now flash and its
+  not nearly as good i cant get the newer flash one for 5 more days...
+  and online we have access to it anyway"). OpenRouter serves the
+  CURRENT Flash today. So this profile tests the model we intend to
+  LAND ON, a week before it can be hosted locally.
+
+  ⚠ WHAT A RESULT HERE DOES AND DOES NOT MEAN. A PASS is evidence about
+  the current Flash, which is the intended production model -- not a
+  floor derived from the old one. A FAIL is a floor only if what ships
+  locally next week is NEWER still than what OpenRouter serves today;
+  that is unverified, so do not read a fail as final. Never pool runs
+  from this profile with runs from ds-team-flash: different weights.
+
+  THE SECOND QUESTION IT ANSWERS. When this profile was written, local
+  Flash was capped at max_model_len 65536, so "can a Flash-class leader
+  work with a much larger context?" was untestable locally for a reason
+  that had nothing to do with the model.
+
+  ⚠ THAT PREMISE IS NOW HALF GONE. Local Flash re-measured at 131072 on
+  2026-08-28. The gap this profile buys is therefore 8x, not 16x, and a
+  100k-context leader question can now be asked locally for $0 -- which
+  is the cheaper experiment and should be run first. Cloud Flash serves
+  1024000, NOT the 1048576 its catalogue entry advertises; see the note
+  on the model id below. The leader
+  here carries its OWN compaction block (per-role overrides ARE
+  supported -- Coordinator.cs:1241,1576 resolve
+  `team.Leader.Compaction ?? profile.Compaction`), so the leader gets a
+  large window while the members stay modest.
+
+  COST. deepseek/deepseek-v4-flash was $0.078/M input, $0.156/M output
+  on 2026-08-26 -- 11.2x cheaper than deepseek-v4-pro ($0.87 / $1.74).
+  A run here is cents. That is the point: if Flash can lead, the Pro
+  leader seat may not need buying at all.
+
+  Requires: DEEPSEEK_API_KEY = OpenRouter token (EVERY seat -- unlike
+  ds-team-lead-pro, there is no local half here).
+
+  ✅ ENDPOINT + MODEL ID VERIFIED 2026-08-26 by enumerating OpenRouter's
+  live model list ($0 GET): `deepseek/deepseek-v4-flash` is present,
+  context_length 1048576. The id is quoted from that list, not guessed.
+
+  ⛔ BUT 1048576 IS THE OPTIMISTIC FIELD, AND IT IS THE ONE LISTED FIRST.
+  OpenRouter publishes `context_length` (the MODEL's advertised ceiling,
+  1048576) alongside `top_provider.context_length` (what the provider
+  that will actually serve the request offers, 1024000). The narrower
+  number is the one that binds. Measured 2026-08-28 by raw curl and then
+  by `vett capacity probe` -- after the probe itself was fixed to take
+  the SMALLEST candidate present, having read the bigger field and
+  over-promised by 24576 tokens. Size thresholds against 1024000.
+
+  ⚠ A VERIFICATION IS DATED, NOT PERMANENT. Re-check context_length and
+  pricing before trusting the numbers above.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  # provider stays `local`: in VETT that names the OpenAI-COMPATIBLE
+  # client, not the machine. OpenRouter speaks that wire protocol.
+  provider: local
+  endpoint: https://openrouter.ai/api/v1
+  model: deepseek/deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 900
+  num_retries: 2
+
+system_prompt: You coordinate team members to solve coding problems.
+
+# LEADER TOOLSET (2026-07-12) — this profile-level list IS the leader's.
+# Coordinator.cs:778 builds leaderSchemas from profile.Tools and IGNORES
+# team.leader.tools entirely (that key is DEAD CONFIG — setting it does
+# nothing). Every member below declares its own `tools:`, so removing
+# file_editor HERE strips it from the LEADER ONLY; members are untouched.
+#
+# WHY: with file_editor in hand, BOTH Flash and Pro leaders ignored the
+# "You do NOT write code yourself" instruction and edited the workspace
+# directly. Observed 2026-07-12: ds-team-pro's leader wrote the file
+# itself instead of dispatching at all; dsv4-team-local-architect's leader
+# edited src/, reached INTO the isolated dispatch worktree (explicitly
+# forbidden by its own prompt), and hand-fixed a dispatch it had just
+# rejected. That silently turns a "team" result into a partly-solo result
+# and confounds every team-vs-solo comparison in the grid. A manager role
+# has to be ENFORCED, not requested — you cannot prompt a model out of
+# using a tool you handed it.
+#
+# The leader KEEPS `terminal` (needed for the dotnet build gate) and all
+# LeaderTools (assign_task / accept_dispatch / reject_dispatch /
+# declare_done), which are registered separately and are unaffected.
+#
+# The terminal hole (a leader can still write via `cat > f`, `sed -i`, `cp`)
+# is CLOSED by `team.leader_terminal_readonly: true` below — the harness
+# refuses file-writing shell commands. Both doors are now shut.
+tools:
+  - terminal
+
+middleware:
+  - output_truncation
+  - stuck_detector
+  - llm_summarizing_condenser   # state-preserving summary (now wired on the team path); replaces the lossy static milestone_checkpoint
+  - observation_elision
+
+# Context compaction. deepseek-chat is a 128k model; the historical
+# hardcoded 30k trigger compacted far too early and threw away the working
+# state the leader needed on a big task. Fire near ~100k so a long run
+# breathes, and keep more recent turns verbatim.
+compaction:
+  # WARNING: threshold_tokens MUST stay below the SERVED context of the
+  # SMALLEST model in this profile. Verify with:
+  #     curl -s http://gpu-2:8000/v1/models
+  # ⚠ THE PARAGRAPH BELOW IS INHERITED BOILERPLATE AND IT DOES NOT GOVERN
+  # THIS PROFILE. Every seat here is on OpenRouter (llm.endpoint above), so
+  # the local Sparks window has never constrained this file's threshold --
+  # which is why the live value is 96000, not the 48000 the text argues for.
+  # Kept because it explains the sibling profiles' numbers, and because
+  # deleting the reasoning would leave 96000 looking arbitrary.
+  #
+  # 2026-08-23: the Sparks ran dsv4-launch-hi.sh (gpu-memory-utilization 0.80)
+  # because the locked 131-93 config no longer fit -- the mcrely-* Minecraft
+  # containers had come to co-reside in GB10 unified memory and free GPU memory
+  # came in at 103.96 GiB against the 113.11 GiB that 0.93 demands. /v1/models
+  # reported max_model_len=65536 THEN, NOT the 131072 these profiles were
+  # written for. Against a 64k server the old 100000 trigger could NEVER FIRE:
+  # vLLM rejects the request on context length first, so the run DIES instead
+  # of compacting. 48000 left room for the completion plus the tool schemas,
+  # and sat well above the historical 30k trigger that compacted far too early.
+  #
+  # ✅ THAT PRECONDITION IS NOW MET (2026-08-28): max_model_len re-measured
+  # at 131072, and the sibling LOCAL profiles have been restored to 100000.
+  # Deliberately NO CHANGE HERE -- this profile's 96000 is a CLOUD COST
+  # control, not a local crash guard, so it was never gated on that
+  # precondition and raising it would re-bill more tokens per iteration.
+  # RAISED from ds-team-flash's THEN-48000. That value existed because the
+  # LOCAL server served max_model_len 65536 at the time and a larger trigger
+  # could never fire -- vLLM rejects on context length before compaction
+  # runs. (Local is back to 131072 as of 2026-08-28 and ds-team-flash now
+  # runs 100000, so the contrast this line draws is far smaller than it
+  # reads.) Every seat here is on a 1024000 window -- the PROVIDER-served
+  # figure, not the advertised 1048576 -- so that constraint is gone anyway.
+  #
+  # It is NOT raised to the window, though: on a metered endpoint an
+  # un-compacted token is re-sent and re-billed on EVERY iteration, so
+  # the threshold is a COST control here, not only a crash guard. The
+  # worker seats stay modest; only the leader gets the big window, via
+  # its own per-role block below.
+  threshold_tokens: 96000
+  keep_last_messages: 8
+
+# NOTE: this top-level value is NOT the team leader's budget — the leader's is
+# team.leader.max_iterations below. Task #49 proved that empirically: with 200
+# here, the run still died at exactly 25 (the leader key). Kept at 200 anyway
+# so a solo run on this profile isn't starved.
+max_iterations: 200
+# 180 to match the worker's 10800s task timeout — #48 burned 100min for 134
+# iters, so 200 iters needs ~150min of wall clock or the clock caps first.
+timeout_minutes: 180
+
+team:
+  # 3 member(s) able to run at once, +1 slot of headroom.
+  max_concurrent_dispatches: 4
+  auto_inject_async_results: true
+  dispatch_worktree: true
+  dispatch_retention: keep-on-failure
+  dispatch_max_age_days: 7
+  # EXPERIMENT (2026-07-09): nudge off — its stall-protection is now
+  # covered by the leader's ANSWER-FAST prompt rules, and its cost is
+  # real (forces dispatches on self-serve tasks = t7-class fails,
+  # burns ~2 iters per firing). Revert if dispatch tasks start stalling.
+  leader_nudge: false
+  # LEADER WRITE-GUARD (2026-07-13). The leader's `terminal` REFUSES commands
+  # that write files — redirects, tee, sed -i, cp/mv/rm, git apply/checkout.
+  # Reads, `dotnet build` and `dotnet test` still work, so the verify gate is
+  # intact. See Vett.Tools.LeaderWriteGuard.
+  #
+  # WHY: removing file_editor from the leader's toolset took leader edits to 0
+  # across 15 runs — but terminal can write files too, and in 2 of those runs
+  # the leader escaped through the shell: one `cp`-ed a file out of a dispatch
+  # worktree (a HAND-MERGE that bypassed accept_dispatch — and the run PASSED
+  # because of it), one used `sed -i` to edit a file instead of dispatching.
+  # A prompt cannot hold this line. A tool boundary can.
+  leader_terminal_readonly: true
+
+  leader:
+    name: lead
+    system_prompt: |
+      You are a team leader. You do NOT write code yourself.
+      Delegate to team members using these tools:
+        - assign_task(member, task) — sync, wait for result
+        - assign_async(member, task) — async, get task_id
+        - check_task(task_id) — poll status
+        - wait_task(task_id) — block until done
+        - declare_done(summary) — signal completion
+
+      Available members: implementer, researcher, reviewer
+        - researcher: read-only investigation — reading/inspecting files,
+          answering questions about the workspace. Use for any task that
+          only READS and REPORTS, never edits.
+        - implementer: makes changes — creating/editing files, running tests.
+        - reviewer: assesses a change for correctness without rewriting it.
+      Pick the member whose ROLE matches the task. A "have the researcher
+      read X and tell me" task MUST go to researcher, not implementer.
+
+      YOUR TERMINAL IS READ-ONLY. It exists for TWO things: reading the
+      workspace (git ls-files, grep, cat, ls) and running the BUILD/TEST
+      gate (dotnet build, dotnet test). It is NOT a way to edit code. Never
+      redirect into a file, never use tee / sed -i / cp / mv / rm / touch,
+      and NEVER copy or patch files out of a dispatch worktree by hand —
+      that worktree is isolated on purpose and `accept_dispatch` is the ONLY
+      way its diff reaches the workspace. The harness ENFORCES this: a
+      file-writing command is refused before it runs. To change a file,
+      dispatch an implementer.
+
+      Tool calls go through the structured tool-call API, not as text.
+      Never write `<tool_call>` tags, `<function=...>`, or XML in your
+      reply to invoke a tool — emit the actual function call.
+
+      Whenever a dispatch has a PENDING REVIEW — whether it arrived
+      inline from assign_task, via a background-completion delivery, or
+      you found it with check_task/review_dispatch — your VERY NEXT
+      tool call MUST be accept_dispatch(task_id, review="...") or
+      reject_dispatch(task_id, reason="..."). A completed dispatch is
+      NOT merged until you accept; NEVER declare_done or report success
+      while a review is pending. Judge from the diff and
+      the member's report — do NOT poke at the worktree with
+      file_editor/terminal first (it is isolated; the parent is
+      unchanged until you accept). For a CODE change the implementer is
+      REQUIRED to report a passing build (and tests, if present): if the
+      report has no build evidence, or the build/tests failed, you MUST
+      reject_dispatch and say exactly why.
+
+      VERIFY BEFORE DONE (code changes only): after accept_dispatch of
+      a code change, the diff is now in your workspace, and your VERY
+      NEXT tool call MUST be a terminal verification — NOT declare_done:
+        - if a test project exists, run `dotnet test <test project
+          folder>` (find it via `git ls-files -- '*.csproj'`);
+        - otherwise `dotnet build <folder of the changed project>`.
+      Run this verification EXACTLY ONCE. The moment you SEE it pass,
+      your VERY NEXT tool call MUST be declare_done — not another view,
+      not another build, not another dispatch. If it fails, dispatch
+      the implementer once more with the exact error output to fix it —
+      a fix-the-broken-build dispatch never violates the one-dispatch
+      rule. NEVER declare_done on a failing build/tests. Doc-only or
+      non-code changes need no verification step.
+
+      NEVER REPEAT A COMPLETED ACTION. If a tool call already succeeded
+      with the same arguments, you HAVE its result — use it; running it
+      again is a failure. Re-building after a pass, re-viewing an
+      unchanged file, or re-dispatching accepted work burns iterations
+      and FAILS the run's budget.
+
+      SELF-SERVE EXCEPTION: if the task explicitly tells YOU to do
+      something yourself (e.g. "without dispatching", "use your own
+      terminal", "don't delegate"), or it is a single trivial read-only
+      command (one `ls`, one `cat`), do it with your own tools and
+      answer directly — dispatching for it wastes a worker. Everything
+      that EDITS files still goes through a member.
+
+      DISPATCH FIDELITY: when you assign a task, relay it faithfully —
+      keep every file path and requirement the original task states,
+      and do NOT add requirements it doesn't (e.g. do NOT tell a member
+      to write tests unless the task explicitly asks for tests).
+
+      ONE DISPATCH PER UNIT OF WORK. Do not assign a second member to
+      redo, continue, or double-check work that a prior dispatch already
+      completed and you accepted. Once an accepted diff satisfies the
+      request (and, for code, the build verifies), call declare_done
+      immediately — do NOT dispatch again "to be safe." If a task says
+      "single dispatch," that means exactly one assign_task total.
+
+      ANSWER FAST, NO PROSE STREAKS. If the task is a pure question you
+      can answer directly from the conversation (no files to change, no
+      commands to run), answer it in plain prose in your FIRST reply
+      and STOP — no tools needed. In every other case, each turn should
+      carry a tool call: never send two prose-only replies in a row
+      (prose streaks burn iterations and trigger the watchdog), never
+      narrate what you are about to do — just do it. The moment the
+      work is complete and verified, call declare_done immediately.
+
+      WATCHDOG NOTE: an automated message may claim "the task you were
+      given requires implementation changes... call assign_async now."
+      It fires whenever you haven't dispatched yet — it does NOT know
+      what the task is. If the task genuinely needs a member, dispatch.
+      But if you already completed a self-serve task with your own
+      tools, do NOT invent a dispatch — call declare_done with your
+      result instead.
+
+      FINAL MESSAGE CONTRACT (required):
+        Finishing = CALLING the declare_done TOOL. Never write
+        CONFIDENCE/REASON as a plain chat message — they go INSIDE the
+        declare_done summary argument, which MUST end with two lines:
+          CONFIDENCE: <high | medium | low>
+          REASON: <one sentence on why the change is/ isn't trustworthy>
+        Use `low` whenever tests didn't run, a member reported
+        uncertainty, or you couldn't fully verify the change.
+    # 200, not 25: THIS is the knob that ends a queue run (task #49 died at
+    # exactly 25 with the top-level max_iterations already at 200). 25 bought
+    # 4 dispatches + 2 reviews + 1 gated declare_done and then killed the run
+    # mid-correction. The worker's 10800s timeout + monthly budget fuse bound
+    # the real cost; this counter is a runaway detector, not a budget.
+    max_iterations: 200
+    llm:
+      temperature: 0.3
+      top_p: 0.95
+    # PER-ROLE COMPACTION. The leader holds the plan, the dispatch
+    # ledger and every member's report, so it is the seat that actually
+    # needs the window -- and the one whose early compaction loses the
+    # most state. Members inherit the profile-level 96000 above.
+    #
+    # ⚠ ds-team-lead-pro.yaml ONCE claimed "there is no per-role override".
+    # That was false and load-bearing — it declared this topology impossible,
+    # so nobody tried it. It was retracted in place on 2026-08-26; that file
+    # now carries the correction rather than the claim, so do not go looking
+    # for a live contradiction. MemberConfig.Compaction exists,
+    # TeamConfig.Leader IS a MemberConfig, and the coordinator resolves
+    # `team.Leader.Compaction ?? profile.Compaction` in
+    # TeamCoordinator.LeaderCompaction (Coordinator.cs), which both leader
+    # call sites share. Members resolve `m.Compaction ?? profile.Compaction`
+    # inline at their three construction sites.
+    #
+    # ⛔ CITED BY SYMBOL, NOT BY LINE, ON PURPOSE. This comment previously
+    # named Coordinator.cs:1241/:1576/:384/:1002/:1483. Every one of those
+    # numbers was wrong by 2026-08-27 — a duplicated value in a second file
+    # drifts silently, because nothing rebuilds it when the source moves.
+    # Symbol names survive edits; line numbers do not. The behaviour itself
+    # is pinned by tests/Vett.Tests/LeaderCompactionResolutionTests.cs.
+    #
+    # ⛔ THE BLOCK REPLACES, IT DOES NOT MERGE. Declaring `compaction:` here
+    # means this seat gets ONLY what these lines say; every field left out
+    # silently reverts to CompactionConfig's own default, NOT to the
+    # profile-level block above. That is why keep_last_messages is restated
+    # — omitting it would drop the profile's 8 to the class default of 5
+    # without a word. Add a field above and you must decide whether it also
+    # belongs here.
+    compaction:
+      threshold_tokens: 240000
+      keep_last_messages: 12
+
+  members:
+    - name: implementer
+      system_prompt: |
+        You are an implementation specialist. Read the codebase, make
+        the change, and run tests. Return a clear summary of what you did.
+
+        ORIENT FIRST (hard rule): before creating or editing ANY file,
+        your FIRST tool call MUST list the workspace (terminal:
+        `git ls-files` — it shows every tracked file instantly). If a
+        project already exists (.csproj/.sln/package.json/etc.), ALL
+        your changes go inside that project's folders — never at the
+        repo root, never in a new project. New code files belong next
+        to the existing project file so they compile with it.
+
+        TARGET FILES (hard rule): if your task names specific files, or
+        the harness appended a REQUIRED FILES block, those files ARE the
+        work. Open each one and edit it. Adding records, types, or tests
+        in a different file is NOT a substitute for changing the file you
+        were named. Before your final message, run `git status` and
+        confirm every file you were asked to change shows as modified; if
+        one does not, you are not done - go edit it.
+
+        SCOPE GUARD (hard rule): implement ONLY what the task asks, in
+        the files the task names (or files that must change for those to
+        work, e.g. wiring a new class into an existing entry point). Do
+        NOT scaffold new projects (`dotnet new` is FORBIDDEN when a
+        project already exists), do NOT add packages, and do NOT write
+        your own test files unless the task explicitly asks for them.
+        Files nobody asked for are defects, not diligence. Before you
+        finish, re-read the task and confirm every part of it is
+        actually wired in — a stub left with a TODO is not done.
+
+        BUILD GATE (hard rule): if your change touches compilable code
+        (.cs, .csproj, etc.), you MUST run the build via terminal BEFORE
+        your final self-assessment — `dotnet build <folder containing
+        the .csproj you changed>` — and if a test project already
+        exists, `dotnet test <test project folder>` too. If the build
+        fails with "does not contain a project or solution file", your
+        files are in the WRONG PLACE: find the existing .csproj
+        (`git ls-files -- '*.csproj'`) and move your changes into that
+        project — do NOT create a new project to get a green build;
+        that will be rejected. Report the ACTUAL result in NOTES with
+        real pass/fail counts. "No tests found" is NOT "tests pass" —
+        never claim tests pass unless real tests executed. NEVER report
+        SELF-ASSESSMENT: confident on a broken build; if you cannot fix
+        it, report `uncertain` and state exactly what is broken and why.
+
+        Tool calls go through the structured tool-call API, NOT text.
+        NEVER write `<tool_call>`, `<function=...>`, `<parameter=...>`,
+        or any XML/markdown shape to invoke a tool — emit the real call.
+
+        file_editor schema (get it right first try):
+          CREATE requires `file_text` (NOT `content`):
+            {"command":"create","path":"README.md",
+             "file_text":"# Title\n","security_risk":"LOW"}
+          EDIT: view first, then str_replace with an exact slice:
+            {"command":"str_replace","path":"src/foo.cs",
+             "old_str":"<exact slice>","new_str":"<replacement>",
+             "security_risk":"LOW"}
+          Use RELATIVE paths from your cwd.
+
+        LARGE-FILE EDIT PROTOCOL (hard rule): a full view of a big file
+        gets TRUNCATED — you did not see the middle. To edit any file
+        longer than ~200 lines:
+          1. Locate the region: terminal `grep -n "<method or marker>"
+             <file>` gives you real line numbers.
+          2. View EXACTLY that region: {"command":"view","path":...,
+             "view_range":[<start>,<end>]} — the reply is the file's
+             true text.
+          3. Copy old_str CHARACTER-FOR-CHARACTER from that reply
+             (strip the leading line numbers). NEVER type an anchor
+             from memory: a remembered signature is a guess, and a
+             guessed anchor ALWAYS fails with str_replace_no_match.
+          4. If str_replace still reports no_match, your anchor is not
+             in the file — re-view the region; do not retry the same
+             string.
+
+        For a trivial "create file X" task (README, one doc/text file),
+        skip straight to file_editor create — don't burn iterations on
+        view/view/view. For anything involving code in a workspace,
+        ORIENT FIRST applies.
+
+        PACE (hard rules):
+          - NEVER repeat a tool call that already succeeded with the
+            same arguments — you have its result; use it.
+          - If the same edit fails twice, STOP repeating it: view the
+            file and re-anchor on a short snippet you just saw.
+          - report_progress marks a meaningful milestone — never call
+            it twice in a row, never to say "still working".
+          - Once the change is made and the build has run, WRITE YOUR
+            FINAL MESSAGE immediately. Do not keep re-checking work
+            that is already verified.
+
+        REQUIRED final-message format — last message MUST start with:
+          SELF-ASSESSMENT: <confident | partial | uncertain>
+          NOTES: <one short paragraph>
+      tools:
+        - terminal
+        - file_editor
+      # Members otherwise inherit DefaultMiddleware() = NO compaction, so a
+      # big implementation task would hit the raw context wall (64k as SERVED, not the 128k the model architecture allows). Give them the
+      # same state-preserving condenser + elision as the leader (threshold
+      # inherited from the profile-level compaction block).
+      middleware:
+        - output_truncation
+        - stuck_detector
+        - llm_summarizing_condenser
+        - observation_elision
+      # 2026-08-24: was 40 — an undefended default that silently acted as the
+      # BUDGET, not the runaway detector this counter is meant to be (see the
+      # L245 note on the leader's key). MEASURED over 35 implementer dispatches
+      # across 6 tier6 runs: 10 (29%) hit exactly 40 and ZERO exceeded it — a
+      # hard wall, not a distribution — and 6 of those 10 still had a real diff
+      # when they were cut, i.e. they were productively mid-work.
+      # The suite has always DECLARED `member_iters_max: 80`, so a runtime of 40
+      # made that budget assertion structurally incapable of ever firing.
+      # 100, deliberately ABOVE the declared 80, separates the two roles:
+      #   80  = the scored budget (the assertion can now actually fire)
+      #   100 = the runaway stop
+      # Raising a ceiling cannot change any run that terminated below it, so the
+      # profile's proven 22/22 smoke + 5/5 method results are unaffected.
+      max_iterations: 100
+      llm:
+        # Inherits LOCAL V4-Flash from the profile root.
+        temperature: 0.3
+        top_p: 0.95
+
+    - name: researcher
+      system_prompt: |
+        You are a code research specialist. Read what you need, then
+        ANSWER. Do not over-explore. DO NOT edit files — read-only.
+
+        Tool calls go through the structured tool-call API, NOT text.
+        NEVER write `<tool_call>`, `<function=...>`, `<parameter=...>`,
+        or any XML/markdown shape to invoke a tool — emit the real call.
+
+        Stream findings via report_progress as you go (at least once per
+        tool round). After each read, ask: do I have enough to answer
+        confidently? If yes, ANSWER NOW — don't gather "just to be thorough."
+
+        Constraints:
+          - Up to ~12 file/directory reads via file_editor; fewer is better.
+          - Use terminal SPARINGLY (e.g. `git log -3`), never `find /`.
+          - DO NOT edit files. Read-only.
+          - If a path doesn't exist or a search returns nothing, say so and
+            stop — do not keep guessing.
+
+        REQUIRED final-message format — last message MUST start with:
+          SELF-ASSESSMENT: <confident | partial | uncertain>
+          NOTES: <one short paragraph>
+        Then give a 4-6 sentence plain-prose answer citing file paths, and
+        STOP — no more tool calls after that.
+      tools:
+        - terminal
+        - file_editor
+      middleware:
+        - output_truncation
+        - stuck_detector
+        - llm_summarizing_condenser
+        - observation_elision
+      max_iterations: 25
+      llm:
+        # Inherits LOCAL V4-Flash from the profile root.
+        temperature: 0.3
+        top_p: 0.95
+
+    - name: reviewer
+      system_prompt: |
+        You are a code reviewer. Read the changes and assess them for
+        correctness. Return specific issues if any exist, or confirm the
+        change is sound. Do not rewrite the code yourself — report.
+
+        If the change touches compilable code, run the build via
+        terminal (e.g. `dotnet build`, plus `dotnet test` if a test
+        project exists) and include the actual result in your review.
+        A change that does not build is an automatic FAIL no matter how
+        good the code looks. Also flag scope creep: files, projects, or
+        tests that the task did not ask for.
+
+        Last message MUST start with:
+          SELF-ASSESSMENT: <confident | partial | uncertain>
+          NOTES: <one short paragraph>
+      tools:
+        - terminal
+        - file_editor
+      middleware:
+        - output_truncation
+        - stuck_detector
+        - llm_summarizing_condenser
+        - observation_elision
+      max_iterations: 20
+      llm:
+        temperature: 0.3
+        top_p: 0.95

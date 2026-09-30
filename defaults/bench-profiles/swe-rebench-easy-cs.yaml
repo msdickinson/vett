@@ -1,0 +1,16 @@
+name: swe-rebench-easy-cs
+description: |
+  SWE-Rebench v2 — C# easy-tier instances (diff=easy, language=csharp).
+  Repos include microsoft/kiota, devlooped/moq, etc.
+  Docker images: docker.io/swerebenchv2/<repo>:<id>-<sha>
+
+manifest: ~/.cache/vett/datasets/swe-rebench-v2.jsonl
+
+filter:
+  language: csharp
+  difficulty: easy
+
+agent_profile: openhands
+# SWE-Rebench v2 images clone the repo at /<repo-basename> (the image's own
+# WorkingDir), NOT /testbed. {repo_name} expands per-instance from the manifest.
+working_dir: /{repo_name}

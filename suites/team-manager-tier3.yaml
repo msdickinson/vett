@@ -1,0 +1,191 @@
+name: team-manager-tier3
+description: |
+  MANAGER TIER — can a manager drive TEAM LEADS that drive workers?
+
+  WHY THIS SUITE EXISTS. `member.team:` (Coordinator.RunNestedTeamAsync,
+  TIER 3, written 2026-07-13) lets a member BE a team rather than a lone
+  agent. As of 2026-08-26 that path had:
+    * ZERO shipped profiles using it — every profile in profiles/ has
+      exactly one `team:` key, i.e. no member carries a sub-team;
+    * ZERO suites exercising it;
+    * unit coverage ONLY for a static-budget leak *under* nesting
+      (AgentLoopDispatchTests), which assumes nesting works rather than
+      demonstrating it.
+  So the whole manager topology shipped unexercised. This suite is the
+  first thing that runs it.
+
+  Mark's requirement (2026-08-26), which is what the shape is FOR: "a
+  manager (either flash or pro) spin out other team leads of flash or pro
+  and they can have a wokeres of flash... the manager one may manage
+  somthing for 24 hours but not do much just keep teams rolling on tings
+  or take back data from it and not read it driectly but have another pro
+  or flash summarize what it needed from it."
+
+  Run: vett team-bench team-manager-tier3 --profile ds-manager-flash-cloud
+
+  ⛔ WHAT THESE ASSERTIONS DO AND DO NOT PROVE.
+
+  They prove the WORK LANDED: both independent features exist, with the
+  required shape, in the manager's workspace. Because the manager has no
+  file_editor and a read-only terminal, and each feature lead's sub-team
+  works in an ISOLATED worktree that only reaches the workspace through
+  accept_dispatch, a green file assertion here means a nested dispatch's
+  diff actually propagated up two levels. That is the functional claim.
+
+  They DO NOT prove the tree had the DEPTH it was configured to have.
+  `tool_call: assign_async, min_count: 2` is a floor on the MANAGER
+  dispatching both leads, and nothing more. Raising it to 4 would NOT be
+  a nesting gate: nested events bubble up into the same stream, so a
+  manager that dispatched one lead four times satisfies min_count 4
+  exactly as well as a two-level tree does. A COUNT CANNOT SEPARATE
+  THOSE TWO WORLDS.
+
+  ⛔ AND THE OBVIOUS INSTRUMENT DOES NOT WORK EITHER. You cannot read
+  depth off member NAMES: Coordinator.TaggedEmit (:419-423) REWRITES
+  `member` and `thread_id` on every event bubbling out of a nested team,
+  so a depth-1 dispatch of `implementer` arrives at the top labelled
+  `member=feature-lead-a`.
+
+  ⛔ NEITHER DOES THE INSTRUMENT THIS HEADER USED TO RECOMMEND. It said
+  "prove depth by counting DISTINCT task_ids / worktree paths". BOTH are
+  wrong, MEASURED on the first run of this suite (2026-08-26):
+    - task_ids are NOT distinct. Ids are minted per-TaskBoard
+      (TaskBoard.cs:173-176) and every sub-team gets a fresh board, so
+      sibling sub-teams BOTH mint `implementer-1`. Counting distinct
+      task_ids UNDERCOUNTS, and any map keyed on task_id alone silently
+      overwrites one sibling with the other.
+    - worktree paths are NOT distinct either, and carried zero depth
+      information: all 10 dispatches at both depths shared ONE flat root.
+
+  PROVE DEPTH WITH `thread_id` ON `dispatch_start`: depth 0 is the
+  literal "main" (Coordinator.cs:604), depth 1+ is the PARENT dispatch's
+  task_id. Corroborate independently with the MEMBER VOCABULARY — a
+  dispatched member stem not declared in the top-level team can only have
+  come from a sub-team. Instrument:
+  `scratchpad/live-2026-08-26/analyze-nesting.py <session_log> \
+     --top-members feature-lead-a,feature-lead-b,summarizer`
+  which carries its own `--expect-flat` negative control.
+
+  ⚠ NEVER POOL a run of this suite with a flat-team run. Different
+  topology, and a manager run pays for a manager loop plus two full
+  leader loops.
+
+profile: ds-manager-flash-cloud
+tier: 3
+
+instances:
+  - id: mgr2-two-independent-value-objects
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Two mutually independent value objects, one per feature lead. No
+      ordering constraint between them and no shared file, so a manager
+      that serialises is choosing to and a manager that parallelises
+      cannot corrupt anything by doing so.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+        </Project>
+      Money.cs: |
+        namespace Domain;
+
+        public sealed class Money
+        {
+            public decimal Amount { get; }
+            public string Currency { get; }
+            public Money(decimal amount, string currency)
+            {
+                Amount = amount;
+                Currency = currency;
+            }
+        }
+    prompt: |
+      The workspace is a small .NET class library, `Domain.csproj`, with
+      one existing type: `Money` in `Money.cs`.
+
+      There are TWO separate features to add. They are completely
+      independent of each other: neither reads the other's code, they
+      touch different files, and there is no ordering constraint between
+      them.
+
+      FEATURE A — add `Discount.cs`:
+        `public sealed class Discount` in namespace `Domain`, with a
+        `public decimal Percent { get; }` property, a constructor taking
+        that percent, and a method
+        `public Money Apply(Money money)` returning a new `Money` whose
+        Amount is reduced by Percent percent, keeping the same Currency.
+
+      FEATURE B — add `TaxRate.cs`:
+        `public sealed class TaxRate` in namespace `Domain`, with a
+        `public decimal Rate { get; }` property, a constructor taking
+        that rate, and a method
+        `public Money Apply(Money money)` returning a new `Money` whose
+        Amount is increased by Rate percent, keeping the same Currency.
+
+      Do not modify `Money.cs` or `Domain.csproj`. Do not add any other
+      files. Both features must compile.
+
+      Assign FEATURE A to one feature lead and FEATURE B to the other,
+      and start BOTH before waiting on either. Each lead gets its own
+      feature and must not be told about the other's.
+    timeout_seconds: 2400
+    assertions:
+      # FEATURE A landed — and, because the manager cannot write files,
+      # a nested dispatch's diff must have propagated up two levels.
+      - file: Discount.cs
+        exists: true
+        content_matches: 'class Discount'
+      - file: Discount.cs
+        exists: true
+        content_matches: 'decimal Percent'
+      - file: Discount.cs
+        exists: true
+        content_matches: 'Money Apply'
+      # FEATURE B landed.
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'class TaxRate'
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'decimal Rate'
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'Money Apply'
+      # The seeded file must be untouched — a manager that "helpfully"
+      # let a lead rewrite Money.cs has broken the independence premise
+      # the whole instance rests on.
+      - file: Money.cs
+        exists: true
+        content_matches: 'public Money\(decimal amount, string currency\)'
+      # FLOOR ONLY: the manager dispatched both leads. `success: true`
+      # matters — two dispatches that both failed would otherwise satisfy
+      # a bare count. This is NOT a depth gate; see the header.
+      - tool_call: assign_async
+        success: true
+        min_count: 2
+      - no_event: malformed_tool_call
+        max_count: 3
+      # Deliberately generous and deliberately NOT scored as the headline
+      # result: nobody has ever measured a nested run, so these numbers
+      # are a runaway stop, not a calibrated budget. The FIRST run's job
+      # is to produce the distribution these should later be set from.
+      - budget:
+          leader_iters_max: 60
+          member_iters_max: 60

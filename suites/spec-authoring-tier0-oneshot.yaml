@@ -1,0 +1,964 @@
+name: spec-authoring-tier0-oneshot
+description: |
+  T0 — ONE-SHOT variant. Each instance's initial prompt inlines the
+  ticket text so the agent doesn't need file_editor to read it, but
+  current_spec.json IS seeded to the workspace because the spec_diff
+  MCP server reads it from disk (not from the argument stream). Pair
+  with profile `spec-authoring-oneshot` which has `tools: []` (only
+  spec_diff MCP tools advertised).
+
+  Run:
+    vett team-bench spec-authoring-tier0-oneshot --profile spec-authoring-oneshot --json > t0-oneshot.json
+  Score Q1 + Q2:
+    python spec_q1_report.py t0-oneshot.json
+
+  Sibling: spec-authoring-tier0.yaml (agentic file-reading variant).
+  Same 5 pairs, same taxonomy, same ground truth. Only prompt shape
+  differs.
+profile: spec-authoring-oneshot
+tier: 0
+instances:
+- id: sa-t0-py-01-bump-literal
+  taxonomy:
+    language: python
+    spec_change_kind: modify_leaf_source
+    diff_size_bucket: '1'
+    pair_id: '01'
+  description: |
+    bump(x) returns x + 1; should return x + 2. Single-op modify.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"bump",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"integer",
+           "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"bump",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"integer",
+           "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.always.leaves.value.source",
+        "from":"x + 1","to":"x + 2"}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — bump increments by wrong amount
+
+    The `bump(x)` function currently returns `x + 1`. Per the updated
+    spec, it should return `x + 2`.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"bump",
+                 "inputs":[{"name":"x","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"always","when":"always","returns":"integer",
+         "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                            "depends_on":["x"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-cs-01-bump-literal
+  taxonomy:
+    language: csharp
+    spec_change_kind: modify_leaf_source
+    diff_size_bucket: '1'
+    pair_id: '01'
+  description: |
+    Bump(x) returns x + 1; should return x + 2. C# pair of py-01.
+    Spec text must be byte-identical to py-01.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"bump",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"integer",
+           "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"bump",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"integer",
+           "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.always.leaves.value.source",
+        "from":"x + 1","to":"x + 2"}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — Bump increments by wrong amount
+
+    The `Bump(x)` method currently returns `x + 1`. Per the updated
+    spec, it should return `x + 2`.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"bump",
+                 "inputs":[{"name":"x","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"always","when":"always","returns":"integer",
+         "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                            "depends_on":["x"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-py-02-age-threshold
+  taxonomy:
+    language: python
+    spec_change_kind: modify_when_condition
+    diff_size_bucket: '2'
+    pair_id: '02'
+  description: |
+    is_valid_age(age) uses adult threshold 18; should be 21.
+    Two modify ops on when: conditions.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"is_valid_age",
+                   "inputs":[{"name":"age","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"pass","when":"age >= 18","returns":"boolean",
+           "leaves":{"value":{"source":"true","determinism":"constant"}}},
+          {"id":"fail","when":"age < 18","returns":"boolean",
+           "leaves":{"value":{"source":"false","determinism":"constant"}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"is_valid_age",
+                   "inputs":[{"name":"age","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"pass","when":"age >= 21","returns":"boolean",
+           "leaves":{"value":{"source":"true","determinism":"constant"}}},
+          {"id":"fail","when":"age < 21","returns":"boolean",
+           "leaves":{"value":{"source":"false","determinism":"constant"}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.pass.when",
+        "from":"age >= 18","to":"age >= 21"},
+       {"op":"modify","path":"return_exits.fail.when",
+        "from":"age < 18","to":"age < 21"}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — is_valid_age uses wrong threshold
+
+    `is_valid_age(age)` currently returns `true` for `age >= 18`.
+    The regulatory requirement changed; it should return `true` only
+    for `age >= 21`.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"is_valid_age",
+                 "inputs":[{"name":"age","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"pass","when":"age >= 18","returns":"boolean",
+         "leaves":{"value":{"source":"true","determinism":"constant"}}},
+        {"id":"fail","when":"age < 18","returns":"boolean",
+         "leaves":{"value":{"source":"false","determinism":"constant"}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-cs-02-age-threshold
+  taxonomy:
+    language: csharp
+    spec_change_kind: modify_when_condition
+    diff_size_bucket: '2'
+    pair_id: '02'
+  description: |
+    IsValidAge(age) uses adult threshold 18; should be 21.
+    C# pair of py-02. Spec text byte-identical.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"is_valid_age",
+                   "inputs":[{"name":"age","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"pass","when":"age >= 18","returns":"boolean",
+           "leaves":{"value":{"source":"true","determinism":"constant"}}},
+          {"id":"fail","when":"age < 18","returns":"boolean",
+           "leaves":{"value":{"source":"false","determinism":"constant"}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"is_valid_age",
+                   "inputs":[{"name":"age","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"pass","when":"age >= 21","returns":"boolean",
+           "leaves":{"value":{"source":"true","determinism":"constant"}}},
+          {"id":"fail","when":"age < 21","returns":"boolean",
+           "leaves":{"value":{"source":"false","determinism":"constant"}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.pass.when",
+        "from":"age >= 18","to":"age >= 21"},
+       {"op":"modify","path":"return_exits.fail.when",
+        "from":"age < 18","to":"age < 21"}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — IsValidAge uses wrong threshold
+
+    `IsValidAge(age)` currently returns `true` for `age >= 18`.
+    The regulatory requirement changed; it should return `true` only
+    for `age >= 21`.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"is_valid_age",
+                 "inputs":[{"name":"age","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"pass","when":"age >= 18","returns":"boolean",
+         "leaves":{"value":{"source":"true","determinism":"constant"}}},
+        {"id":"fail","when":"age < 18","returns":"boolean",
+         "leaves":{"value":{"source":"false","determinism":"constant"}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-py-03-divide-zero-check
+  taxonomy:
+    language: python
+    spec_change_kind: add_validation_branch
+    diff_size_bucket: '2'
+    pair_id: '03'
+  description: |
+    divide(a, b) crashes when b == 0; should raise invalid_argument.
+    One modify + one add_exit.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"divide",
+                   "inputs":[{"name":"a","type":"number"},
+                             {"name":"b","type":"number"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"number",
+           "leaves":{"value":{"source":"a / b","determinism":"computed",
+                              "depends_on":["a","b"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"divide",
+                   "inputs":[{"name":"a","type":"number"},
+                             {"name":"b","type":"number"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"divide_by_zero","when":"b == 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                              "determinism":"constant"}}},
+          {"id":"always","when":"b != 0","returns":"number",
+           "leaves":{"value":{"source":"a / b","determinism":"computed",
+                              "depends_on":["a","b"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.always.when",
+        "from":"always","to":"b != 0"},
+       {"op":"add_exit","at":"before:always","value":{
+         "id":"divide_by_zero","when":"b == 0","returns":"raises",
+         "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                            "determinism":"constant"}}}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — divide crashes on zero divisor
+
+    `divide(a, b)` currently computes `a / b` unconditionally,
+    crashing when `b == 0`. Per the spec update, it should raise
+    `invalid_argument("division by zero")` when `b == 0`, and return
+    `a / b` otherwise.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"divide",
+                 "inputs":[{"name":"a","type":"number"},
+                           {"name":"b","type":"number"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"always","when":"always","returns":"number",
+         "leaves":{"value":{"source":"a / b","determinism":"computed",
+                            "depends_on":["a","b"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-cs-03-divide-zero-check
+  taxonomy:
+    language: csharp
+    spec_change_kind: add_validation_branch
+    diff_size_bucket: '2'
+    pair_id: '03'
+  description: |
+    Divide(a, b) crashes when b == 0; should raise invalid_argument.
+    C# pair of py-03. Spec text byte-identical.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"divide",
+                   "inputs":[{"name":"a","type":"number"},
+                             {"name":"b","type":"number"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"always","when":"always","returns":"number",
+           "leaves":{"value":{"source":"a / b","determinism":"computed",
+                              "depends_on":["a","b"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"divide",
+                   "inputs":[{"name":"a","type":"number"},
+                             {"name":"b","type":"number"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"divide_by_zero","when":"b == 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                              "determinism":"constant"}}},
+          {"id":"always","when":"b != 0","returns":"number",
+           "leaves":{"value":{"source":"a / b","determinism":"computed",
+                              "depends_on":["a","b"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"modify","path":"return_exits.always.when",
+        "from":"always","to":"b != 0"},
+       {"op":"add_exit","at":"before:always","value":{
+         "id":"divide_by_zero","when":"b == 0","returns":"raises",
+         "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                            "determinism":"constant"}}}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — Divide crashes on zero divisor
+
+    `Divide(a, b)` currently computes `a / b` unconditionally,
+    crashing when `b == 0`. Per the spec update, it should raise
+    `invalid_argument("division by zero")` when `b == 0`, and return
+    `a / b` otherwise.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"divide",
+                 "inputs":[{"name":"a","type":"number"},
+                           {"name":"b","type":"number"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"always","when":"always","returns":"number",
+         "leaves":{"value":{"source":"a / b","determinism":"computed",
+                            "depends_on":["a","b"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-py-04-clamp-raise-rename
+  taxonomy:
+    language: python
+    spec_change_kind: rename_exit_change_returns
+    diff_size_bucket: '2'
+    pair_id: '04'
+  description: |
+    clamp(x) returns 0 for negatives; should raise invalid_argument.
+    Tests the id-immutability rule: must be remove_exit + add_exit,
+    NOT modify on `id` (would fail validation).
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"clamp",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"neg_clamp","when":"x < 0","returns":"integer",
+           "leaves":{"value":{"source":"0","determinism":"constant"}}},
+          {"id":"identity","when":"x >= 0","returns":"integer",
+           "leaves":{"value":{"source":"x","determinism":"input",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"clamp",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"raise_neg","when":"x < 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                              "determinism":"constant"}}},
+          {"id":"identity","when":"x >= 0","returns":"integer",
+           "leaves":{"value":{"source":"x","determinism":"input",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"remove_exit","path":"return_exits.neg_clamp"},
+       {"op":"add_exit","at":"before:identity","value":{
+         "id":"raise_neg","when":"x < 0","returns":"raises",
+         "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                            "determinism":"constant"}}}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — clamp swallows negatives instead of erroring
+
+    `clamp(x)` currently returns `0` for any negative `x`. Per the
+    spec update, it should raise `invalid_argument("negative input")`
+    instead. The non-negative branch is unchanged.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"clamp",
+                 "inputs":[{"name":"x","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"neg_clamp","when":"x < 0","returns":"integer",
+         "leaves":{"value":{"source":"0","determinism":"constant"}}},
+        {"id":"identity","when":"x >= 0","returns":"integer",
+         "leaves":{"value":{"source":"x","determinism":"input",
+                            "depends_on":["x"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-cs-04-clamp-raise-rename
+  taxonomy:
+    language: csharp
+    spec_change_kind: rename_exit_change_returns
+    diff_size_bucket: '2'
+    pair_id: '04'
+  description: |
+    Clamp(x) returns 0 for negatives; should raise invalid_argument.
+    C# pair of py-04. Spec text byte-identical. Tests id-immutability.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"clamp",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"neg_clamp","when":"x < 0","returns":"integer",
+           "leaves":{"value":{"source":"0","determinism":"constant"}}},
+          {"id":"identity","when":"x >= 0","returns":"integer",
+           "leaves":{"value":{"source":"x","determinism":"input",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"clamp",
+                   "inputs":[{"name":"x","type":"integer"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {},
+        "return_exits": [
+          {"id":"raise_neg","when":"x < 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                              "determinism":"constant"}}},
+          {"id":"identity","when":"x >= 0","returns":"integer",
+           "leaves":{"value":{"source":"x","determinism":"input",
+                              "depends_on":["x"]}}}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"remove_exit","path":"return_exits.neg_clamp"},
+       {"op":"add_exit","at":"before:identity","value":{
+         "id":"raise_neg","when":"x < 0","returns":"raises",
+         "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                            "determinism":"constant"}}}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Bug — Clamp swallows negatives instead of erroring
+
+    `Clamp(x)` currently returns `0` for any negative `x`. Per the
+    spec update, it should raise `invalid_argument("negative input")`
+    instead. The non-negative branch is unchanged.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"clamp",
+                 "inputs":[{"name":"x","type":"integer"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {},
+      "return_exits": [
+        {"id":"neg_clamp","when":"x < 0","returns":"integer",
+         "leaves":{"value":{"source":"0","determinism":"constant"}}},
+        {"id":"identity","when":"x >= 0","returns":"integer",
+         "leaves":{"value":{"source":"x","determinism":"input",
+                            "depends_on":["x"]}}}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-py-05-user-summary-active
+  taxonomy:
+    language: python
+    spec_change_kind: add_response_field
+    diff_size_bucket: '1'
+    pair_id: '05'
+  description: |
+    get_user_summary(user) returns {name, email}; should also include
+    active. Single add_leaf op.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"get_user_summary",
+                   "inputs":[{"name":"user","type":"User"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {
+          "User": {"kind":"record",
+                   "fields":{"name":"string","email":"string",
+                             "is_active":"boolean"}}
+        },
+        "return_exits": [
+          {"id":"ok","when":"always","returns":"map<string,any>",
+           "leaves":{
+             "name":{"source":"user.name","determinism":"input",
+                     "depends_on":["user"]},
+             "email":{"source":"user.email","determinism":"input",
+                      "depends_on":["user"]}
+           }}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"get_user_summary",
+                   "inputs":[{"name":"user","type":"User"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {
+          "User": {"kind":"record",
+                   "fields":{"name":"string","email":"string",
+                             "is_active":"boolean"}}
+        },
+        "return_exits": [
+          {"id":"ok","when":"always","returns":"map<string,any>",
+           "leaves":{
+             "name":{"source":"user.name","determinism":"input",
+                     "depends_on":["user"]},
+             "email":{"source":"user.email","determinism":"input",
+                      "depends_on":["user"]},
+             "active":{"source":"user.is_active","determinism":"input",
+                       "depends_on":["user"]}
+           }}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+        "value":{"source":"user.is_active","determinism":"input",
+                 "depends_on":["user"]}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Feature — user summary should include active status
+
+    `get_user_summary(user)` currently returns `{name, email}`. Per
+    the updated spec, it should also include `active`, sourced from
+    `user.is_active`. Deterministically from input.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"get_user_summary",
+                 "inputs":[{"name":"user","type":"User"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {
+        "User": {"kind":"record",
+                 "fields":{"name":"string","email":"string",
+                           "is_active":"boolean"}}
+      },
+      "return_exits": [
+        {"id":"ok","when":"always","returns":"map<string,any>",
+         "leaves":{
+           "name":{"source":"user.name","determinism":"input",
+                   "depends_on":["user"]},
+           "email":{"source":"user.email","determinism":"input",
+                    "depends_on":["user"]}
+         }}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5
+- id: sa-t0-cs-05-user-summary-active
+  taxonomy:
+    language: csharp
+    spec_change_kind: add_response_field
+    diff_size_bucket: '1'
+    pair_id: '05'
+  description: |
+    GetUserSummary(user) returns {name, email}; should include active.
+    C# pair of py-05. Spec text byte-identical.
+  workspace: empty-git-repo
+  seed_files:
+    current_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"get_user_summary",
+                   "inputs":[{"name":"user","type":"User"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {
+          "User": {"kind":"record",
+                   "fields":{"name":"string","email":"string",
+                             "is_active":"boolean"}}
+        },
+        "return_exits": [
+          {"id":"ok","when":"always","returns":"map<string,any>",
+           "leaves":{
+             "name":{"source":"user.name","determinism":"input",
+                     "depends_on":["user"]},
+             "email":{"source":"user.email","determinism":"input",
+                      "depends_on":["user"]}
+           }}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_spec.json: |
+      {
+        "spec_version": "0.4",
+        "target": {"kind":"function","name":"get_user_summary",
+                   "inputs":[{"name":"user","type":"User"}],
+                   "stateful":false,"state_fields":{}},
+        "types": {
+          "User": {"kind":"record",
+                   "fields":{"name":"string","email":"string",
+                             "is_active":"boolean"}}
+        },
+        "return_exits": [
+          {"id":"ok","when":"always","returns":"map<string,any>",
+           "leaves":{
+             "name":{"source":"user.name","determinism":"input",
+                     "depends_on":["user"]},
+             "email":{"source":"user.email","determinism":"input",
+                      "depends_on":["user"]},
+             "active":{"source":"user.is_active","determinism":"input",
+                       "depends_on":["user"]}
+           }}
+        ],
+        "external_calls": []
+      }
+    .groundtruth/desired_diff.json: |
+      {"spec_diff_version":"0.1","changes":[
+       {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+        "value":{"source":"user.is_active","determinism":"input",
+                 "depends_on":["user"]}}
+      ]}
+  prompt: |
+    You are being given a ticket. The current behavioral spec is
+    already on disk at `./current_spec.json` in this workspace; the
+    `mcp__spec_diff__diff_apply` tool reads it automatically.
+
+    Emit exactly one `mcp__spec_diff__diff_apply` call whose diff
+    transforms the current spec into what the ticket asks for. Then
+    stop. Use `spec_diff_version: "0.1"`.
+
+    ## Ticket
+
+    # Feature — user summary should include active status
+
+    `GetUserSummary(user)` currently returns `{name, email}`. Per
+    the updated spec, it should also include `active`, sourced from
+    `user.is_active`. Deterministically from input.
+
+    ## Current spec (for reference; also available on disk)
+
+    ```json
+    {
+      "spec_version": "0.4",
+      "target": {"kind":"function","name":"get_user_summary",
+                 "inputs":[{"name":"user","type":"User"}],
+                 "stateful":false,"state_fields":{}},
+      "types": {
+        "User": {"kind":"record",
+                 "fields":{"name":"string","email":"string",
+                           "is_active":"boolean"}}
+      },
+      "return_exits": [
+        {"id":"ok","when":"always","returns":"map<string,any>",
+         "leaves":{
+           "name":{"source":"user.name","determinism":"input",
+                   "depends_on":["user"]},
+           "email":{"source":"user.email","determinism":"input",
+                    "depends_on":["user"]}
+         }}
+      ],
+      "external_calls": []
+    }
+    ```
+  timeout_seconds: 180
+  assertions:
+  - tool_call: mcp__spec_diff__diff_apply
+    success: true
+  - budget:
+      leader_iters_max: 5

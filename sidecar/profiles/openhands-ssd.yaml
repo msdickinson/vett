@@ -1,0 +1,56 @@
+name: openhands-ssd
+description: |
+  openhands profile with workdir_backing on SSD. Identical wire format
+  to the base openhands profile (same system prompt, same tools, same
+  middleware, same LLM settings) — but the runner bind-mounts /testbed
+  from /mnt/ssd/vett/runs/{run_id}/instances/{instance_id}/testbed so
+  agent edits land on SSD instead of the container's writable layer.
+
+  Uses tmpfs for /tmp and /root/.cache to keep pytest and pip caches in
+  RAM. Mirror discipline is preserved because nothing on the LLM-visible
+  wire changes — only the host-side backing store for the container's
+  files.
+
+sandbox:
+  run_as_root: true
+  home: /tmp
+  default_cwd: /testbed
+  workdir_backing:
+    type: host_path
+    host_base: /mnt/ssd/vett/runs/{run_id}/instances/{instance_id}/testbed
+    container_path: /testbed
+  tmpfs_mounts:
+    - /tmp:size=2g
+    - /root/.cache:size=1g
+
+llm:
+  temperature: 1.0
+  top_p: 0.95
+
+# Same system prompt as the built-in openhands profile.
+system_prompt_file: ../testdata/ref-system-prompt.txt
+
+user_template: |
+  I have access to a repository at {working_dir} with base commit {base_commit}.
+
+  <problem_statement>
+  {problem_statement}
+  </problem_statement>
+
+  Please analyze the problem, make the necessary changes, and run tests
+  to verify. Call finish when you are done.
+
+tools:
+  - terminal
+  - file_editor
+  - task_tracker
+  - finish
+  - think
+
+middleware:
+  - output_truncation
+  - submit_detector
+  - stuck_detector
+
+max_iterations: 100
+timeout_minutes: 30

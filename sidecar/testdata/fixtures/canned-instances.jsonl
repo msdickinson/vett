@@ -1,0 +1,2 @@
+{"instance_id":"test__canned-001","repo":"test","base_commit":"abc123","problem_statement":"The function foo in app.py incorrectly returns 1 instead of 2. Fix it.","working_dir":"/workspace"}
+{"instance_id":"test__canned-002","repo":"test","base_commit":"def456","problem_statement":"The module bar is missing a docstring. Add one.","working_dir":"/workspace"}

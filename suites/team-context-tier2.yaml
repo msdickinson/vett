@@ -1,0 +1,274 @@
+name: team-context-tier2
+description: |
+  Tier 2: workspace-pressure tests. Each instance ships a workspace
+  with multiple sizable files so the cheapest path to the answer is
+  a targeted grep / search, not a full read of every file. The bench
+  validates two things the production harness must also handle:
+    1. The agent finds the right answer (no false-negative).
+    2. The agent's tool-call budget is enough — i.e. it didn't try
+       to ingest the entire workspace into context.
+  These are not "context overflow" tests in the literal sense
+  (AEON's context is large enough to absorb these workspaces); they
+  measure SEARCH DISCIPLINE under noise, which is the same skill
+  the agent needs when a real ticket lands in a 50-file project.
+
+  Run: vett team-bench team-context-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: ctx1-marker-grep
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Eight markdown spec files in the workspace. Exactly one of
+      them contains a unique tag `MARKER-9F2A4B`. The agent must
+      report which filename contains it. Researcher with its 6-tool
+      cap should grep, not read everything.
+    workspace: empty-git-repo
+    seed_files:
+      docs/auth-spec.md: |
+        # Auth Spec
+
+        The auth context owns user identity, password hashes, and
+        session tokens. Session lifetime is 12h; refresh on use.
+
+        ## Endpoints
+        - POST /auth/login   — accepts username + password, issues JWT
+        - POST /auth/refresh — accepts a refresh token, issues new JWT
+        - POST /auth/logout  — invalidates a session
+
+        ## Storage
+        Passwords are stored as bcrypt hashes (cost factor 12).
+        Sessions live in Postgres; revoked sessions are TTL-cleaned
+        nightly.
+
+        ## Failure modes
+        - bad password: 401, no info leak about whether user exists
+        - locked account: 423 with retry-after
+        - expired token: 401, client must reauth
+      docs/billing-spec.md: |
+        # Billing Spec
+
+        Billing owns subscriptions, invoices, and payment methods.
+
+        ## Plans
+        - free      ($0,  unlimited reads, 100 writes/mo)
+        - starter   ($9,  unlimited reads, 10k writes/mo)
+        - pro       ($29, unlimited reads, 100k writes/mo)
+        - enterprise (custom)
+
+        ## Invoicing
+        Monthly cycle, prorated on plan change. Stripe is the
+        payment processor; we never store raw card numbers.
+
+        ## Failure modes
+        - card declined: retry once, then notify user
+        - chargeback: freeze account, escalate to support
+        - currency mismatch: use Stripe's conversion at txn time
+      docs/notifications-spec.md: |
+        # Notifications Spec
+
+        Notifications fan out to email, push, and in-app channels
+        based on user preferences. Each channel has its own retry
+        and dedup logic.
+
+        ## Channels
+        - email: SES, retry 3x with backoff, max 24h
+        - push:  APNs/FCM, drop after 1h
+        - in-app: Postgres + WebSocket, never dropped
+
+        ## Templates
+        Stored in /templates/ as Handlebars; localized per user.
+
+        ## Marker note
+        Internal trace tag for this spec: MARKER-9F2A4B (used by
+        the audit pipeline to correlate notification events).
+      docs/orders-spec.md: |
+        # Orders Spec
+
+        Orders go through draft → placed → fulfilled → closed. A
+        placed order is immutable except for cancellation.
+
+        ## State machine
+        - draft     → placed     (CheckoutService)
+        - placed    → fulfilled  (FulfillmentWorker)
+        - fulfilled → closed     (auto after 30 days)
+        - any       → cancelled  (CancellationService)
+
+        ## Idempotency
+        Orders carry a client-supplied IdempotencyKey; duplicate
+        keys within 24h return the original order, not a new one.
+      docs/inventory-spec.md: |
+        # Inventory Spec
+
+        Per-SKU stock split into Available + Reserved sub-counts.
+        Restock adds to Available; Reserve moves Available → Reserved;
+        Ship decrements Reserved AND Total.
+
+        ## Concurrency
+        Single-row Postgres advisory lock per SKU during mutation
+        to avoid lost updates. Deadlocks resolved by smaller
+        transaction yielding.
+
+        ## Reorder thresholds
+        Each SKU has a low-water mark; crossing it emits a
+        ReorderRequested event consumed by Procurement.
+      docs/search-spec.md: |
+        # Search Spec
+
+        Search runs against an OpenSearch cluster. Indexes are
+        rebuilt nightly from the canonical Postgres state.
+
+        ## Query types
+        - keyword: BM25 with stemming
+        - semantic: embedding via local Qwen model
+        - hybrid: keyword + semantic blend, RRF reranking
+
+        ## Latency targets
+        - p50 < 80ms
+        - p95 < 250ms
+        - p99 < 500ms (timeouts at 600ms; partial results returned)
+      docs/audit-spec.md: |
+        # Audit Spec
+
+        Every state-changing API call is logged to an append-only
+        audit table. Reads are not audited (too noisy).
+
+        ## Schema
+        - id, ts, actor_id, action, target_type, target_id, payload
+
+        ## Retention
+        - 7 years for billing/identity actions
+        - 1 year for everything else
+        - GDPR delete request scrubs payload but keeps row
+
+        ## Replay
+        Audit log can replay a user's last 30 days for debugging.
+      docs/observability-spec.md: |
+        # Observability Spec
+
+        Three pillars: metrics (Prometheus), logs (Loki), traces
+        (Tempo). Grafana is the unified surface.
+
+        ## Metrics
+        Standard RED metrics per service. Plus per-aggregate
+        domain counters (orders_placed_total, etc.).
+
+        ## Logs
+        Structured JSON. Trace ID and span ID are required fields.
+
+        ## Traces
+        OpenTelemetry SDK; sample rate 10% in prod, 100% in staging.
+    prompt: |
+      The workspace contains a `docs/` directory with several spec
+      files. Exactly ONE file has a unique trace tag
+      `MARKER-9F2A4B` somewhere in its contents.
+
+      Use `assign_task` to dispatch a RESEARCHER to find which
+      file contains that marker. The researcher must use grep
+      (terminal) — do NOT read every file; that's the wrong
+      approach.
+
+      Then in YOUR final reply, state the filename in the form:
+      `The marker is in docs/<filename>.md`.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_start
+        member: researcher
+      - tool_call: terminal
+        success: true
+      - assistant_text_contains: "notifications-spec.md"
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 12
+
+  - id: ctx2-summarize-without-reading-all
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Same workspace shape as ctx1 (eight spec files), but the
+      task asks for a one-sentence summary of a specific spec.
+      The researcher should grep to find the right file, view
+      only that file, and answer — not view all eight.
+    workspace: empty-git-repo
+    seed_files:
+      docs/auth-spec.md: |
+        # Auth Spec
+        Sessions are 12h; refresh on use. Passwords stored as
+        bcrypt cost-12. Endpoints under /auth/.
+      docs/billing-spec.md: |
+        # Billing Spec
+        Plans: free, starter ($9), pro ($29), enterprise. Stripe
+        for processing; never store raw card numbers. Monthly
+        cycle, prorated on plan change.
+      docs/notifications-spec.md: |
+        # Notifications Spec
+        Three channels: email (SES, 24h retry), push (APNs/FCM,
+        1h TTL), in-app (Postgres + WebSocket, never dropped).
+        Templates are Handlebars, localized per user.
+      docs/orders-spec.md: |
+        # Orders Spec
+        State machine: draft → placed → fulfilled → closed, plus
+        a cancelled side state from any non-closed status. Orders
+        carry an IdempotencyKey for 24h dedup.
+      docs/inventory-spec.md: |
+        # Inventory Spec
+        SKUs have Available + Reserved. Postgres advisory locks
+        per-SKU during mutation. Low-water marks emit
+        ReorderRequested events.
+      docs/search-spec.md: |
+        # Search Spec
+        OpenSearch with nightly rebuild. Three query modes:
+        keyword (BM25), semantic (Qwen embeddings), hybrid (RRF).
+        p95 latency target 250ms.
+      docs/audit-spec.md: |
+        # Audit Spec
+        Append-only table of state-changing API calls. 7-year
+        retention for billing/identity, 1 year otherwise. GDPR
+        delete scrubs payload but keeps row.
+      docs/observability-spec.md: |
+        # Observability Spec
+        Three pillars: Prometheus metrics, Loki logs, Tempo
+        traces. OpenTelemetry sampling at 10% prod / 100% staging.
+        Trace ID and span ID required in all logs.
+    prompt: |
+      The workspace has a `docs/` directory with several spec
+      files. Use `assign_task` to dispatch a RESEARCHER to find
+      and summarize the BILLING spec in ONE sentence. The
+      researcher should locate the right file with grep or
+      direct path (not read all eight), then view JUST that file.
+
+      In YOUR final reply, give the one-sentence summary. Make
+      sure the words "Stripe" and "billing" both appear in your
+      answer — they're the proof you read the right file.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_start
+        member: researcher
+      - assistant_text_contains: "Stripe"
+      - assistant_text_contains: "billing"
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 12

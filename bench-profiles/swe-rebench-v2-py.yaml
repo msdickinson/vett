@@ -1,0 +1,26 @@
+name: swe-rebench-v2-py
+description: |
+  SWE-Rebench v2 — ALL selected Python instances (1990 total: easy/medium/hard,
+  fix + feat). Selection frozen 2026-07-09 from python_selected.csv; problem
+  statements + base commits + image names joined from train.parquet.
+
+  Docker images are pre-pulled into the runner box *bench daemon* (socket
+  /var/run/docker-bench.sock, 2371 images, data root /srv/hdd/dickinson/docker-bench).
+  Run with DOCKER_HOST pointed at that socket so pulls are local, e.g.:
+
+    DOCKER_HOST=unix:///var/run/docker-bench.sock \
+      vett bench run --profile swe-rebench-v2-py --limit 5 \
+        --endpoint http://gpu-1:8000/v1 --model deepseek-v4-flash
+
+  Narrow further at the CLI: --difficulty easy|medium|hard, --type fix|feat.
+
+manifest: ~/.cache/vett/datasets/swe-rebench-v2.jsonl
+
+filter:
+  language: python
+
+agent_profile: openhands
+# SWE-Rebench v2 images clone the repo at /<repo-basename> (the image's own
+# WorkingDir), NOT /testbed. {repo_name} is expanded per-instance from the
+# manifest's repo field (e.g. adamchainz/flake8-comprehensions -> /flake8-comprehensions).
+working_dir: /{repo_name}

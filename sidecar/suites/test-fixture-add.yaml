@@ -1,0 +1,24 @@
+name: test-fixture-add
+description: |
+  Smoke-test fixture for the full Vett pipeline. One synthetic instance
+  whose mathlib.py has `add` returning a - b instead of a + b. The
+  docker image vett-test:add-001 must be built first via:
+    docker build -t vett-test:add-001 testdata/fixtures/add-001/
+  (or on the runner box:  cd vett-v2/add-001 && docker build -t vett-test:add-001 .)
+
+loader:
+  type: jsonl
+  path: ../testdata/fixtures/add-001/instances.jsonl
+
+rendering:
+  working_dir: /testbed
+  fields:
+    problem_statement: problem_statement
+    base_commit: base_commit
+
+sandbox:
+  image_template: vett-test:{instance}
+  default_cwd: /testbed
+
+scorer:
+  type: pass_fail

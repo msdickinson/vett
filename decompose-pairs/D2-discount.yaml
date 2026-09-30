@@ -1,0 +1,13 @@
+name: D2-discount
+description: |
+  Monolithic A6 "add Discount feature to existing Order" vs
+  decomposed A3 (Discount VO) + A6 (extend Order). Smaller scope
+  than D1; tests whether the lift pattern holds on a 2-step chain.
+
+monolith:
+  suite: team-decompose-pairs-d2
+  instance: D2-monolith-discount
+
+decomposed:
+  - { suite: team-decompose-pairs-d2, instance: D2-step1-discount-vo }
+  - { suite: team-decompose-pairs-d2, instance: D2-step2-extend-order }

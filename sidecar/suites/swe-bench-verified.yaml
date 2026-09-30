@@ -1,0 +1,42 @@
+name: swe-bench-verified
+description: |
+  SWE-bench Verified — 500 manually-validated GitHub issues from popular
+  Python repositories (princeton-nlp/SWE-bench_Verified on HuggingFace
+  Hub). Each instance has a base_commit, a failing test set, a reference
+  gold patch, and the Docker image needed to run it.
+
+  Phase 1/2 of Vett does not pull datasets directly. Run the one-time
+  helper first:
+
+    vett import-swebench --dataset princeton-nlp/SWE-bench_Verified \
+                         --split test
+
+  That writes ~/.vett/datasets/princeton-nlp__SWE-bench_Verified-test.jsonl
+  which this suite's jsonl loader reads.
+
+  The image_template default below (`swebench/sweb.eval.x86_64.{instance}`)
+  matches the current naming convention at Docker Hub. If you use a
+  locally-built image namespace (e.g. from the openhands eval harness
+  or a custom rebuild), override image_template in a workspace copy of
+  this suite.
+
+loader:
+  type: jsonl
+  path: ~/.vett/datasets/princeton-nlp__SWE-bench_Verified-test.jsonl
+
+rendering:
+  working_dir: /testbed
+  fields:
+    problem_statement: problem_statement
+    base_commit: base_commit
+    repo: repo
+
+sandbox:
+  image_template: swebench/sweb.eval.x86_64.{instance}
+  default_cwd: /testbed
+
+scorer:
+  type: swe_bench_harness
+  config:
+    dataset: princeton-nlp/SWE-bench_Verified
+    timeout_seconds: 1800

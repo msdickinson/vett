@@ -1,0 +1,2 @@
+{"instance_id":"canned-hello","repo":"local/hello","base_commit":"main","problem_statement":"Print the string \"hello, world\" to stdout. The fix is trivial; this exists to smoke-test the harness end-to-end."}
+{"instance_id":"canned-add","repo":"local/add","base_commit":"main","problem_statement":"Implement a function add(a, b) that returns the sum. Same purpose as canned-hello: prove the run pipeline works."}

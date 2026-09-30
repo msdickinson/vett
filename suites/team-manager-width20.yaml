@@ -1,0 +1,392 @@
+name: team-manager-width20
+description: |
+  MANAGER WIDTH — can ONE manager actually keep TWENTY sub-teams rolling?
+
+  WHY THIS SUITE EXISTS (Mark, 2026-08-26): "5 teams is likey most real
+  cases but it would be nice to know if we can handle 10-20 under a
+  manager. as it would basicly say manager can queue out 1 or MORE types
+  ow rok like minecraft + ai stuff." And: "can a flash teamn lead handle
+  it (the current online one not my dgx ones that are dumber falsh) and
+  pro one or how does it handle on both".
+
+  So there are TWO questions and they need different evidence:
+    Q1 STRUCTURAL — does the HARNESS survive 20 concurrent sub-teams?
+       (worktrees, task-id minting, event bubbling, no deadlock)
+    Q2 BEHAVIOURAL — does the MODEL IN THE MANAGER SEAT cope with a
+       20-way breakdown, or does it serialise / drop leads / lose track?
+  Q1 fails identically for a good model and a bad one, so it must be
+  read off the event stream, never off the pass/fail.
+
+  RUN BOTH ARMS — they differ ONLY in the manager seat's model:
+    vett team-bench team-manager-width20 --profile ds-manager-flash-w20
+    vett team-bench team-manager-width20 --profile ds-manager-pro-w20
+  Both are emitted by scratchpad/live-2026-08-26/gen-manager-profile.py
+  and were verified to differ in exactly one key
+  (/team/leader/llm/model), which is what makes this a clean A/B on the
+  manager seat. Regenerate; never hand-edit.
+
+  ⛔ WHAT THE ASSERTIONS BELOW DO AND DO NOT PROVE.
+
+  They prove the WORK LANDED: twenty independent types exist with the
+  required shape in the manager's workspace. Because the manager has no
+  file_editor and a read-only terminal, and every sub-team works in an
+  ISOLATED worktree that only reaches the workspace through
+  accept_dispatch, a green file assertion means twenty nested dispatches'
+  diffs each propagated up two levels and merged without clobbering each
+  other. That is a real and fairly strong functional claim.
+
+  They DO NOT prove the manager USED TWENTY LEADS. Nothing here does, and
+  no count of `assign_async` can:
+    * nested dispatches bubble into the SAME event stream, so a manager
+      that gave ONE lead all twenty features produces MORE assign_async
+      events than one that used twenty leads properly;
+    * Coordinator.TaggedEmit (:419-423) rewrites `member` on every
+      bubbled event to the PARENT's name, so member names in the stream
+      do not say who really ran.
+  MEASURE WIDTH THIS WAY INSTEAD — count the DISTINCT `member` values
+  among dispatch_start events whose `thread_id == "main"`. Those and
+  only those were issued by the manager itself (Coordinator.cs:604
+  emits the literal "main" at depth 0). Twenty distinct lead names there
+  is the width claim; anything less is the manager choosing not to fan
+  out, which is a MODEL result, not a harness result.
+    scratchpad/live-2026-08-26/analyze-nesting.py <session_log> \
+      --top-members feature-lead-a,feature-lead-b,feature-lead-c,feature-lead-d,feature-lead-e,feature-lead-f,feature-lead-g,feature-lead-h,feature-lead-i,feature-lead-j,feature-lead-k,feature-lead-l,feature-lead-m,feature-lead-n,feature-lead-o,feature-lead-p,feature-lead-q,feature-lead-r,feature-lead-s,feature-lead-t,summarizer
+
+  ⚠ NEVER POOL a run of this suite with team-manager-tier3. Different
+  width AND a differently-worded manager prompt (the roster has to name
+  its leads), so the two are confounded by construction. Compare
+  width-20 arms against EACH OTHER only.
+
+  ⚠ THE SEEDED FILE IS THE SHARED-STATE CANARY. Twenty sub-teams merging
+  into one workspace is exactly where a lost update would show up. Every
+  feature is forbidden from touching Money.cs, so if Money.cs comes back
+  altered or missing, some sub-team's merge overwrote a sibling's.
+
+profile: ds-manager-flash-w20
+tier: 3
+
+instances:
+  - id: mgrw20-twenty-independent-value-objects
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Twenty mutually independent value objects, one per feature lead. No
+      ordering constraint between any two, no shared file, and each is
+      small enough that a lead cannot plausibly fail it on difficulty —
+      the ONLY thing under test is whether twenty of them can be run at
+      once. Difficulty is deliberately held near zero so that a failure
+      is attributable to WIDTH and not to the task.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+        </Project>
+      Money.cs: |
+        namespace Domain;
+
+        public sealed class Money
+        {
+            public decimal Amount { get; }
+            public string Currency { get; }
+            public Money(decimal amount, string currency)
+            {
+                Amount = amount;
+                Currency = currency;
+            }
+        }
+    prompt: |
+      The workspace is a small .NET class library, `Domain.csproj`, with
+      one existing type: `Money` in `Money.cs`.
+
+      There are TWENTY separate features to add. They are completely
+      independent of one another: no feature reads another's code, each
+      touches its own single new file, and there is no ordering
+      constraint between any of them.
+
+      Every feature follows the SAME shape. For feature <Name> with
+      property <Prop>, add `<Name>.cs` containing:
+
+        public sealed class <Name>   (namespace Domain)
+          - a `public decimal <Prop> { get; }` property
+          - a constructor taking that decimal and assigning it
+          - a method `public Money Apply(Money money)` returning a NEW
+            Money with the transformed Amount and the SAME Currency
+
+      The twenty features, with their property and their transform:
+
+        1. Discount    Percent  -> Amount reduced by Percent percent
+        2. TaxRate     Rate     -> Amount increased by Rate percent
+        3. Surcharge   Fee      -> Amount plus Fee
+        4. Rebate      Credit   -> Amount minus Credit
+        5. Tip         Ratio    -> Amount multiplied by (1 + Ratio)
+        6. ServiceFee  Flat     -> Amount plus Flat
+        7. Markup      Factor   -> Amount multiplied by Factor
+        8. LevyRate    Rate     -> Amount increased by Rate percent
+        9. Handling    Cost     -> Amount plus Cost
+       10. Shipping    Charge   -> Amount plus Charge
+       11. Commission  Share    -> Amount multiplied by (1 + Share)
+       12. Penalty     Fine     -> Amount plus Fine
+       13. Allowance   Grant    -> Amount minus Grant
+       14. Freight     Weight   -> Amount plus Weight
+       15. Insurance   Premium  -> Amount plus Premium
+       16. Royalty     Cut      -> Amount multiplied by Cut
+       17. Bonus       Uplift   -> Amount multiplied by (1 + Uplift)
+       18. Deposit     Portion  -> Amount multiplied by Portion
+       19. Excise      Levy     -> Amount increased by Levy percent
+       20. Gratuity    Extra    -> Amount plus Extra
+
+      Do not modify `Money.cs` or `Domain.csproj`. Do not add any other
+      files. Every feature must compile.
+
+      Assign ONE feature to each feature lead, and start ALL of them
+      before waiting on any. Each lead gets only its own feature and
+      must not be told about the others.
+    timeout_seconds: 3600
+    assertions:
+      # ── The twenty features landed. Each is three assertions: the type,
+      # its property, and the Apply method — the same triple the tier3
+      # suite uses, so a partial file (class declared, method missing)
+      # cannot pass.
+      - file: Discount.cs
+        exists: true
+        content_matches: 'class Discount'
+      - file: Discount.cs
+        exists: true
+        content_matches: 'decimal Percent'
+      - file: Discount.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'class TaxRate'
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'decimal Rate'
+      - file: TaxRate.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Surcharge.cs
+        exists: true
+        content_matches: 'class Surcharge'
+      - file: Surcharge.cs
+        exists: true
+        content_matches: 'decimal Fee'
+      - file: Surcharge.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Rebate.cs
+        exists: true
+        content_matches: 'class Rebate'
+      - file: Rebate.cs
+        exists: true
+        content_matches: 'decimal Credit'
+      - file: Rebate.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Tip.cs
+        exists: true
+        content_matches: 'class Tip'
+      - file: Tip.cs
+        exists: true
+        content_matches: 'decimal Ratio'
+      - file: Tip.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: ServiceFee.cs
+        exists: true
+        content_matches: 'class ServiceFee'
+      - file: ServiceFee.cs
+        exists: true
+        content_matches: 'decimal Flat'
+      - file: ServiceFee.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Markup.cs
+        exists: true
+        content_matches: 'class Markup'
+      - file: Markup.cs
+        exists: true
+        content_matches: 'decimal Factor'
+      - file: Markup.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: LevyRate.cs
+        exists: true
+        content_matches: 'class LevyRate'
+      - file: LevyRate.cs
+        exists: true
+        content_matches: 'decimal Rate'
+      - file: LevyRate.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Handling.cs
+        exists: true
+        content_matches: 'class Handling'
+      - file: Handling.cs
+        exists: true
+        content_matches: 'decimal Cost'
+      - file: Handling.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Shipping.cs
+        exists: true
+        content_matches: 'class Shipping'
+      - file: Shipping.cs
+        exists: true
+        content_matches: 'decimal Charge'
+      - file: Shipping.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Commission.cs
+        exists: true
+        content_matches: 'class Commission'
+      - file: Commission.cs
+        exists: true
+        content_matches: 'decimal Share'
+      - file: Commission.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Penalty.cs
+        exists: true
+        content_matches: 'class Penalty'
+      - file: Penalty.cs
+        exists: true
+        content_matches: 'decimal Fine'
+      - file: Penalty.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Allowance.cs
+        exists: true
+        content_matches: 'class Allowance'
+      - file: Allowance.cs
+        exists: true
+        content_matches: 'decimal Grant'
+      - file: Allowance.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Freight.cs
+        exists: true
+        content_matches: 'class Freight'
+      - file: Freight.cs
+        exists: true
+        content_matches: 'decimal Weight'
+      - file: Freight.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Insurance.cs
+        exists: true
+        content_matches: 'class Insurance'
+      - file: Insurance.cs
+        exists: true
+        content_matches: 'decimal Premium'
+      - file: Insurance.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Royalty.cs
+        exists: true
+        content_matches: 'class Royalty'
+      - file: Royalty.cs
+        exists: true
+        content_matches: 'decimal Cut'
+      - file: Royalty.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Bonus.cs
+        exists: true
+        content_matches: 'class Bonus'
+      - file: Bonus.cs
+        exists: true
+        content_matches: 'decimal Uplift'
+      - file: Bonus.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Deposit.cs
+        exists: true
+        content_matches: 'class Deposit'
+      - file: Deposit.cs
+        exists: true
+        content_matches: 'decimal Portion'
+      - file: Deposit.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Excise.cs
+        exists: true
+        content_matches: 'class Excise'
+      - file: Excise.cs
+        exists: true
+        content_matches: 'decimal Levy'
+      - file: Excise.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      - file: Gratuity.cs
+        exists: true
+        content_matches: 'class Gratuity'
+      - file: Gratuity.cs
+        exists: true
+        content_matches: 'decimal Extra'
+      - file: Gratuity.cs
+        exists: true
+        content_matches: 'Money Apply'
+
+      # ── THE LOST-UPDATE CANARY. Twenty sub-team merges into one workspace
+      # is precisely where one accept_dispatch could clobber another. The
+      # seeded file is touched by NO feature, so any change to it is a
+      # merge defect, not a model choice.
+      - file: Money.cs
+        exists: true
+        content_matches: 'public Money\(decimal amount, string currency\)'
+
+      # ── FLOOR ONLY, NOT A WIDTH GATE (see header). `success: true`
+      # matters: twenty dispatches that all failed would satisfy a bare
+      # count. Width itself is read off thread_id in the event stream.
+      - tool_call: assign_async
+        success: true
+        min_count: 20
+
+      - no_event: malformed_tool_call
+        max_count: 5
+
+      # ── RUNAWAY STOPS, NOT BUDGETS. Nobody has measured a 20-wide
+      # nested run, so these are deliberately generous and are NOT the
+      # headline result. Note member_iterations for a NESTED seat is own
+      # iters + its whole sub-team's iters, so a lead's number is ~3x a
+      # flat member's — a cap set from flat-run intuition would fire on
+      # a perfectly healthy run and be misread as the model failing.
+      - budget:
+          leader_iters_max: 160
+          member_iters_max: 240

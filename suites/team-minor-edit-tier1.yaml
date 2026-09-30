@@ -1,0 +1,231 @@
+name: team-minor-edit-tier1
+description: |
+  A1 Minor-Edit archetype: smallest defensible change to a single
+  pre-existing file. Bump a version, fix a typo, rename a constant,
+  add a comment, change a string literal.
+
+  Each instance:
+    - seeds ONE file in the workspace (pre-existing content)
+    - asks the leader to make a tiny in-place edit
+    - asserts the new file content matches a tight regex
+    - no build, no test — pure structural verification
+
+  These should be the easiest possible coding tasks. If we can't hit
+  >= 95% on this suite at n=5, something is fundamentally wrong with
+  the harness or the model.
+
+  Run: vett team-bench team-minor-edit-tier1
+
+profile: ds-team-flash
+tier: 1
+
+instances:
+  - id: e1-bump-csproj-version
+    taxonomy: &mini_tax
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A1 — bump csproj version 1.0.0 -> 1.0.1
+    workspace: empty-git-repo
+    seed_files:
+      MyLib.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <Version>1.0.0</Version>
+            <Authors>Mark</Authors>
+            <Description>A small library.</Description>
+          </PropertyGroup>
+        </Project>
+    prompt: |
+      The file `MyLib.csproj` in the workspace root currently has
+      `<Version>1.0.0</Version>`. Bump it to `1.0.1` for the next
+      release. Do not change anything else in the file.
+
+      Do this yourself with `file_editor` (no need to dispatch). Use
+      `file_editor` with `command: "str_replace"` and provide ALL
+      four required fields: `command`, `path`, `old_str`, `new_str`.
+      Then tell me the change is made.
+    timeout_seconds: 360
+    assertions:
+      - file: MyLib.csproj
+        exists: true
+        content_matches: '<Version>1\.0\.1</Version>'
+      - file: MyLib.csproj
+        content_matches: '<TargetFramework>net10\.0</TargetFramework>'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 12
+          member_iters_max: 10
+
+  - id: e2-fix-readme-typo
+    taxonomy: *mini_tax
+    description: A1 — fix typo "teh" -> "the" in README
+    workspace: empty-git-repo
+    seed_files:
+      README.md: |
+        # MyLib
+
+        A small utility library. This is teh main entry point for
+        callers — see the public API for details.
+
+        ## Install
+
+        ```
+        dotnet add package MyLib
+        ```
+    prompt: |
+      The file `README.md` in the workspace root has a typo: `teh`
+      where it should say `the`. Fix that one occurrence. Don't
+      reword anything else.
+
+      Do this yourself with `file_editor` (no need to dispatch). Use
+      `file_editor` with `command: "str_replace"` and ALL four
+      required fields: `command`, `path`, `old_str`, `new_str`. Then
+      tell me the change is made.
+    timeout_seconds: 360
+    assertions:
+      - file: README.md
+        exists: true
+        content_matches: '\bThis is the main entry point\b'
+      - file: README.md
+        # The typo string must be gone.
+        # (case-insensitive regex; "teh" should not appear as a word.)
+        content_matches: '^(?!.*\bteh\b)[\s\S]*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 12
+          member_iters_max: 10
+
+  - id: e3-bump-const-retries
+    taxonomy: *mini_tax
+    description: A1 — change `const int MaxRetries = 3` to `5`
+    workspace: empty-git-repo
+    seed_files:
+      RetryPolicy.cs: |
+        namespace MyLib;
+
+        public static class RetryPolicy
+        {
+            public const int MaxRetries = 3;
+            public const int BaseDelayMs = 100;
+
+            public static int ComputeDelay(int attempt) =>
+                BaseDelayMs * (1 << attempt);
+        }
+    prompt: |
+      In `RetryPolicy.cs`, change the constant `MaxRetries` from `3`
+      to `5`. Keep everything else exactly the same — don't touch
+      `BaseDelayMs`, `ComputeDelay`, the namespace, or the class
+      declaration.
+
+      Do this yourself with `file_editor` (no need to dispatch). Use
+      `file_editor` with `command: "str_replace"` and ALL four
+      required fields: `command`, `path`, `old_str`, `new_str`. Then
+      tell me the change is made.
+    timeout_seconds: 360
+    assertions:
+      - file: RetryPolicy.cs
+        exists: true
+        content_matches: 'public const int MaxRetries = 5;'
+      - file: RetryPolicy.cs
+        content_matches: 'public const int BaseDelayMs = 100;'
+      - file: RetryPolicy.cs
+        content_matches: 'BaseDelayMs \* \(1 << attempt\)'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 12
+          member_iters_max: 10
+
+  - id: e4-rename-greeting
+    taxonomy: *mini_tax
+    description: A1 — change string literal "Hello, World!" -> "Hello, Universe!"
+    workspace: empty-git-repo
+    seed_files:
+      Greeter.cs: |
+        namespace MyLib;
+
+        public static class Greeter
+        {
+            public static string Greet() => "Hello, World!";
+        }
+    prompt: |
+      In `Greeter.cs`, change the returned string from
+      `"Hello, World!"` to `"Hello, Universe!"`. Don't change the
+      method signature, namespace, or class.
+
+      Do this yourself with `file_editor` (no need to dispatch). Use
+      `file_editor` with `command: "str_replace"` and ALL four
+      required fields: `command`, `path`, `old_str`, `new_str`. Then
+      tell me the change is made.
+    timeout_seconds: 360
+    assertions:
+      - file: Greeter.cs
+        exists: true
+        content_matches: '"Hello, Universe!"'
+      - file: Greeter.cs
+        content_matches: 'public static string Greet\(\) =>'
+      - file: Greeter.cs
+        # Old literal must be gone.
+        content_matches: '^(?![\s\S]*"Hello, World!")[\s\S]*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 12
+          member_iters_max: 10
+
+  - id: e5-add-todo-comment
+    taxonomy: *mini_tax
+    description: "A1 — add `// TODO: handle negative inputs` above a method"
+    workspace: empty-git-repo
+    seed_files:
+      MathUtil.cs: |
+        namespace MyLib;
+
+        public static class MathUtil
+        {
+            public static int Square(int x) => x * x;
+
+            public static int Cube(int x) => x * x * x;
+        }
+    prompt: |
+      In `MathUtil.cs`, add the comment
+
+          // TODO: handle negative inputs
+
+      on its own line, immediately above the declaration of the
+      `Square` method (so the comment sits between the opening
+      `{` of the class and the `public static int Square(...)` line).
+      Don't add it above `Cube`. Don't change any code.
+
+      Do this yourself with `file_editor` (no need to dispatch). Use
+      `file_editor` with `command: "str_replace"` and ALL four
+      required fields: `command`, `path`, `old_str`, `new_str`. Then
+      tell me the change is made.
+    timeout_seconds: 360
+    assertions:
+      - file: MathUtil.cs
+        exists: true
+        # Comment appears immediately before the Square declaration.
+        # `\s*` allows leading indentation; multiline mode so `^` /
+        # `$` anchor per line.
+        content_matches: '//\s*TODO:\s*handle negative inputs\s*\n\s*public static int Square'
+      - file: MathUtil.cs
+        # Cube unchanged: must NOT have the TODO right above it.
+        content_matches: '^(?![\s\S]*TODO[^\n]*\n\s*public static int Cube)[\s\S]*$'
+      - file: MathUtil.cs
+        content_matches: 'public static int Cube\(int x\) => x \* x \* x;'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 14
+          member_iters_max: 10

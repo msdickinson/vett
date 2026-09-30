@@ -1,0 +1,50 @@
+name: openhands
+description: |
+  Faithful mirror of openhands-sdk V1. System prompt, tool schemas, and
+  middleware chain all match the reference run byte-for-byte. Any
+  "improvements" belong in a different profile where their effect can be
+  measured as a delta against this baseline.
+
+sandbox:
+  run_as_root: true
+  home: /tmp
+  default_cwd: /testbed
+
+llm:
+  temperature: 1.0
+  top_p: 0.95
+  request_timeout_seconds: 300
+  num_retries: 5
+
+# The 12,098-char V1 system prompt lives alongside the captured reference
+# request. Kept out of this YAML for readability; identical bytes.
+system_prompt_file: ../testdata/ref-system-prompt.txt
+
+# The SWE-bench user template is rendered by the suite runner with
+# {problem_statement}, {working_dir}, {base_commit}. For Phase 1 we ship
+# a minimal template; richer multi-phase templates are added in 1d when
+# the swe-bench-verified suite lands.
+user_template: |
+  I have access to a repository at {working_dir} with base commit {base_commit}.
+
+  <problem_statement>
+  {problem_statement}
+  </problem_statement>
+
+  Please analyze the problem, make the necessary changes, and run tests
+  to verify. Call finish when you are done.
+
+tools:
+  - terminal
+  - file_editor
+  - task_tracker
+  - finish
+  - think
+
+middleware:
+  - output_truncation
+  - submit_detector
+  - stuck_detector
+
+max_iterations: 100
+timeout_minutes: 30

@@ -1,0 +1,372 @@
+name: team-ddd-modify-tier3
+description: |
+  Tier 3: modify an EXISTING working DDD project. Unlike the
+  team-aggregate / team-domain suites (which start from an empty
+  workspace and ask the agent to build from scratch), each instance
+  here ships a fully-implemented aggregate with passing tests, and
+  the agent has to add a feature WITHOUT breaking the existing
+  behavior. This is the closest the bench gets to a real TF ticket
+  shape: the codebase exists, the tests pin its current contract,
+  the task is "extend it."
+
+  Each instance ships:
+    - <Aggregate>.csproj (.NET 10 + xUnit)
+    - Existing implementation file(s) — already valid
+    - <Aggregate>_Tests.cs — N existing tests (all passing) +
+      M new tests covering the feature being added (failing until
+      the agent implements it)
+  The agent must:
+    - read the existing code (file_editor view / terminal grep)
+    - add the new feature
+    - preserve every existing test passing
+    - make every new test pass
+
+  Run: vett team-bench team-ddd-modify-tier3
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  - id: m1-add-discount-to-order
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Existing Order aggregate (Order + OrderLine + Money) is fully
+      implemented and 14 tests are green. The task adds a Discount
+      value object plus a DiscountedSubtotal property on Order. The
+      seeded test file contains the existing 14 tests PLUS 4 new
+      tests for the discount feature; the agent must keep the 14
+      green and turn the 4 red → green by editing Order.cs and
+      adding Discount.cs.
+    workspace: empty-git-repo
+    seed_files:
+      Order.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Money.cs: |
+        namespace Domain;
+
+        public sealed class Money : IEquatable<Money>
+        {
+            public decimal Amount   { get; }
+            public string  Currency { get; }
+
+            public Money(decimal amount, string currency)
+            {
+                Amount   = amount;
+                Currency = currency ?? throw new ArgumentNullException(nameof(currency));
+            }
+
+            public Money Add(Money other)
+            {
+                if (other.Currency != Currency)
+                    throw new InvalidOperationException("currency mismatch");
+                return new Money(Amount + other.Amount, Currency);
+            }
+
+            public bool Equals(Money? other) =>
+                other is not null && other.Amount == Amount && other.Currency == Currency;
+
+            public override bool Equals(object? obj) => obj is Money m && Equals(m);
+            public override int GetHashCode() => HashCode.Combine(Amount, Currency);
+            public override string ToString() => $"{Amount} {Currency}";
+        }
+      OrderLine.cs: |
+        namespace Domain;
+
+        public sealed class OrderLine
+        {
+            public Guid   Id        { get; }
+            public string Sku       { get; }
+            public int    Quantity  { get; }
+            public Money  UnitPrice { get; }
+            public Money  Total     => new Money(Quantity * UnitPrice.Amount, UnitPrice.Currency);
+
+            public OrderLine(Guid id, string sku, int quantity, Money unitPrice)
+            {
+                if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+                Id = id; Sku = sku; Quantity = quantity; UnitPrice = unitPrice;
+            }
+        }
+      Order.cs: |
+        namespace Domain;
+
+        public sealed class Order
+        {
+            private readonly List<OrderLine> _lines = new();
+
+            public Guid                       Id       { get; } = Guid.NewGuid();
+            public string                     Currency { get; }
+            public bool                       IsClosed { get; private set; }
+            public IReadOnlyList<OrderLine>   Lines    => _lines;
+
+            public Money Subtotal
+            {
+                get
+                {
+                    var sum = 0m;
+                    foreach (var l in _lines) sum += l.Total.Amount;
+                    return new Money(sum, Currency);
+                }
+            }
+
+            public Order(string currency) { Currency = currency; }
+
+            public Guid AddLine(string sku, int quantity, Money unitPrice)
+            {
+                if (IsClosed) throw new InvalidOperationException("order is closed");
+                if (unitPrice.Currency != Currency)
+                    throw new InvalidOperationException("currency mismatch");
+                if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+                var id = Guid.NewGuid();
+                _lines.Add(new OrderLine(id, sku, quantity, unitPrice));
+                return id;
+            }
+
+            public void RemoveLine(Guid lineId)
+            {
+                if (IsClosed) throw new InvalidOperationException("order is closed");
+                var idx = _lines.FindIndex(l => l.Id == lineId);
+                if (idx < 0) throw new InvalidOperationException("line not found");
+                _lines.RemoveAt(idx);
+            }
+
+            public void Close()
+            {
+                if (IsClosed) throw new InvalidOperationException("already closed");
+                IsClosed = true;
+            }
+        }
+      Order_Tests.cs: |
+        using System.Linq;
+
+        namespace Domain;
+
+        public class Order_Tests
+        {
+            // === EXISTING — DO NOT BREAK =================================
+
+            [Fact]
+            public void Money_Equals_ByValue()
+            {
+                Assert.Equal(new Money(10, "USD"), new Money(10, "USD"));
+                Assert.NotEqual(new Money(10, "USD"), new Money(11, "USD"));
+                Assert.NotEqual(new Money(10, "USD"), new Money(10, "EUR"));
+            }
+
+            [Fact]
+            public void Money_Add_DifferentCurrency_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => new Money(1, "USD").Add(new Money(1, "EUR")));
+            }
+
+            [Fact]
+            public void New_Order_HasIdAndIsOpen()
+            {
+                var o = new Order("USD");
+                Assert.NotEqual(Guid.Empty, o.Id);
+                Assert.False(o.IsClosed);
+                Assert.Empty(o.Lines);
+            }
+
+            [Fact]
+            public void AddLine_AppendsLineWithGeneratedId()
+            {
+                var o = new Order("USD");
+                var lineId = o.AddLine("WIDGET-1", 2, new Money(5, "USD"));
+                Assert.NotEqual(Guid.Empty, lineId);
+                Assert.Single(o.Lines);
+            }
+
+            [Fact]
+            public void AddLine_DifferentCurrency_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 1, new Money(1, "EUR")));
+            }
+
+            [Fact]
+            public void AddLine_NegativeQuantity_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 0, new Money(1, "USD")));
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", -1, new Money(1, "USD")));
+            }
+
+            [Fact]
+            public void Subtotal_SumsLineTotals()
+            {
+                var o = new Order("USD");
+                o.AddLine("A", 2, new Money(5, "USD"));
+                o.AddLine("B", 3, new Money(2.5m, "USD"));
+                o.AddLine("C", 1, new Money(0.5m, "USD"));
+                Assert.Equal(new Money(18m, "USD"), o.Subtotal);
+            }
+
+            [Fact]
+            public void Subtotal_EmptyOrder_IsZeroInOrderCurrency()
+            {
+                var o = new Order("USD");
+                Assert.Equal(new Money(0, "USD"), o.Subtotal);
+            }
+
+            [Fact]
+            public void RemoveLine_ById_RemovesLine()
+            {
+                var o = new Order("USD");
+                var l1 = o.AddLine("A", 1, new Money(1, "USD"));
+                var l2 = o.AddLine("B", 1, new Money(1, "USD"));
+                o.RemoveLine(l1);
+                Assert.Single(o.Lines);
+            }
+
+            [Fact]
+            public void RemoveLine_MissingId_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.RemoveLine(Guid.NewGuid()));
+            }
+
+            [Fact]
+            public void Close_FlipsStatus()
+            {
+                var o = new Order("USD");
+                o.AddLine("X", 1, new Money(1, "USD"));
+                o.Close();
+                Assert.True(o.IsClosed);
+            }
+
+            [Fact]
+            public void Close_Twice_Throws()
+            {
+                var o = new Order("USD");
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.Close());
+            }
+
+            [Fact]
+            public void AddLine_WhenClosed_Throws()
+            {
+                var o = new Order("USD");
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 1, new Money(1, "USD")));
+            }
+
+            [Fact]
+            public void RemoveLine_WhenClosed_Throws()
+            {
+                var o = new Order("USD");
+                var lineId = o.AddLine("X", 1, new Money(1, "USD"));
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.RemoveLine(lineId));
+            }
+
+            // === NEW — discount feature ==================================
+
+            [Fact]
+            public void Discount_Percent_NormalizesAndStoresValue()
+            {
+                var d = Discount.Percent(10);
+                Assert.Equal(0.10m, d.Fraction);
+            }
+
+            [Fact]
+            public void Discount_Percent_OutOfRange_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => Discount.Percent(-1));
+                Assert.ThrowsAny<Exception>(() => Discount.Percent(101));
+            }
+
+            [Fact]
+            public void DiscountedSubtotal_NoDiscount_EqualsSubtotal()
+            {
+                var o = new Order("USD");
+                o.AddLine("A", 2, new Money(5, "USD"));   // subtotal 10
+                Assert.Equal(o.Subtotal, o.DiscountedSubtotal);
+            }
+
+            [Fact]
+            public void DiscountedSubtotal_AppliesPercent()
+            {
+                var o = new Order("USD");
+                o.AddLine("A", 2, new Money(5, "USD"));   // subtotal 10
+                o.ApplyDiscount(Discount.Percent(20));
+                Assert.Equal(new Money(8m, "USD"), o.DiscountedSubtotal);
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      An existing DDD `Order` aggregate is in the workspace. Look
+      at the seeded files first (Order.cs, OrderLine.cs, Money.cs,
+      Order_Tests.cs) to understand the current shape. The 14
+      existing tests are passing. The 4 NEW tests at the bottom of
+      Order_Tests.cs (commented `=== NEW`) reference a `Discount`
+      type and `Order.ApplyDiscount` / `Order.DiscountedSubtotal`
+      that don't exist yet — they fail to compile until you add
+      them.
+
+      Add these WITHOUT breaking any of the existing tests:
+
+      1. `Discount.cs` — value object
+         - public sealed class Discount
+              public decimal Fraction { get; }   // e.g. 0.10 for 10%
+              public static Discount Percent(decimal percent)
+                  // throws if percent < 0 or percent > 100
+                  // returns a Discount with Fraction = percent/100m
+              private constructor (only Percent factory creates one)
+
+      2. Modify `Order.cs`:
+         - add a private nullable Discount field (or initialize to None)
+         - add `public Money DiscountedSubtotal { get; }` —
+              if no discount applied, equals Subtotal;
+              otherwise Subtotal × (1 - Discount.Fraction), in the
+              order's currency.
+         - add `public void ApplyDiscount(Discount discount)` —
+              stores the discount on the order. (No need to throw on
+              re-apply for this exercise; the new tests only call it
+              once.)
+
+      DO NOT change any existing test or method signature. DO NOT
+      run `dotnet test` yourself — just edit/create the files and
+      report done; the bench harness verifies. All 18 tests
+      (14 existing + 4 new) must pass.
+    timeout_seconds: 720
+    assertions:
+      - file: Discount.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 18
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 28
+          leader_iters_max: 18

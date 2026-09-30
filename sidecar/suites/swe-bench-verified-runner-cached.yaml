@@ -1,0 +1,28 @@
+name: swe-bench-verified-runner-cached
+description: |
+  SWE-bench Verified against the locally-built images on the runner box (no
+  swebench/ namespace prefix). Created 2026-04-15 for the first real
+  end-to-end Vett v2 run against a real SWE-bench instance.
+
+  The upstream suite/swe-bench-verified.yaml uses the Docker Hub image
+  template `swebench/sweb.eval.x86_64.{instance}`; this override
+  targets the locally-built variant `sweb.eval.x86_64.{instance}:latest`
+  cached on the runner box /volume1/@docker.
+
+loader:
+  type: jsonl
+  path: ~/.vett/datasets/princeton-nlp__SWE-bench_Verified-test.jsonl
+
+rendering:
+  working_dir: /testbed
+  fields:
+    problem_statement: problem_statement
+    base_commit: base_commit
+    repo: repo
+
+sandbox:
+  image_template: sweb.eval.x86_64.{instance}:latest
+  default_cwd: /testbed
+
+scorer:
+  type: pass_fail

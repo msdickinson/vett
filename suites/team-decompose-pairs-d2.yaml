@@ -1,0 +1,211 @@
+name: team-decompose-pairs-d2
+description: |
+  D2 — Discount feature. Monolith A6 "add Discount feature to Order"
+  vs decomposed A3 (Discount VO) + A6 (extend Order). Smaller than D1
+  but still tests the workspace-carries-forward pattern.
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: D2-monolith-discount
+    taxonomy: &complex_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A6 — Add a Discount VO + DiscountedSubtotal property to existing
+      Order class in one shot.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: &domain_csproj |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Money.cs: &money_cs |
+        namespace Domain;
+        public class Money
+        {
+            public decimal Amount { get; }
+            public string Currency { get; }
+            public Money(decimal amount, string currency) { Amount = amount; Currency = currency; }
+            public override bool Equals(object? o) => o is Money m && m.Amount == Amount && m.Currency == Currency;
+            public override int GetHashCode() => HashCode.Combine(Amount, Currency);
+        }
+      Order.cs: &order_cs |
+        namespace Domain;
+        public class Order
+        {
+            private readonly List<(string Sku, int Qty, Money Price)> _lines = new();
+            public string Currency { get; }
+            public Order(string currency) => Currency = currency;
+            public void AddLine(string sku, int qty, Money price)
+            {
+                if (price.Currency != Currency) throw new InvalidOperationException("currency mismatch");
+                _lines.Add((sku, qty, price));
+            }
+            public Money Subtotal => new(_lines.Sum(l => l.Qty * l.Price.Amount), Currency);
+        }
+      Order_Tests.cs: &order_tests |
+        namespace Domain;
+        public class Order_Tests
+        {
+            // Existing — must stay green
+            [Fact] public void Order_Construct() => Assert.Equal("USD", new Order("USD").Currency);
+            [Fact] public void Order_AddLine_Tracks() {
+                var o = new Order("USD");
+                o.AddLine("a", 2, new Money(3m, "USD"));
+                Assert.Equal(new Money(6m, "USD"), o.Subtotal);
+            }
+            [Fact] public void Order_CurrencyMismatch_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Order("USD").AddLine("a", 1, new Money(1m, "EUR")));
+            }
+
+            // New — must turn green
+            [Fact] public void Discount_HasPercentage_AndCurrency()
+            {
+                var d = new Discount(10, "USD"); // 10 percent
+                Assert.Equal(10, d.Percent);
+                Assert.Equal("USD", d.Currency);
+            }
+            [Fact] public void Discount_NegativePercent_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Discount(-5, "USD"));
+            }
+            [Fact] public void Discount_Over100_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Discount(150, "USD"));
+            }
+            [Fact] public void Order_DiscountedSubtotal_NoDiscount_EqualsSubtotal()
+            {
+                var o = new Order("USD");
+                o.AddLine("a", 2, new Money(10m, "USD"));
+                Assert.Equal(new Money(20m, "USD"), o.DiscountedSubtotal);
+            }
+            [Fact] public void Order_DiscountedSubtotal_AppliesDiscount()
+            {
+                var o = new Order("USD");
+                o.AddLine("a", 2, new Money(10m, "USD"));
+                o.ApplyDiscount(new Discount(10, "USD"));
+                Assert.Equal(new Money(18m, "USD"), o.DiscountedSubtotal);
+            }
+            [Fact] public void Order_ApplyDiscount_DifferentCurrency_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.ApplyDiscount(new Discount(10, "EUR")));
+            }
+        }
+    prompt: |
+      `Money.cs` + `Order.cs` exist. `Order_Tests.cs` has 3 existing
+      tests passing PLUS 6 new failing tests for a Discount feature.
+
+      Dispatch an implementer to:
+        1. Create `Discount.cs` — VO with `int Percent` (0-100, throws
+           if out of range) and `string Currency`. Constructor validates.
+        2. Modify `Order.cs` to add:
+              - `void ApplyDiscount(Discount d)` that throws if
+                d.Currency != Currency
+              - `Money DiscountedSubtotal { get; }` property: returns
+                Subtotal if no discount applied, else Subtotal * (1 - percent/100)
+
+      Keep the 3 existing tests green. 6 new tests turn green.
+      Accept_dispatch.
+    timeout_seconds: 540
+    assertions: &d2_assertions
+      - file: Money.cs
+        exists: true
+      - file: Order.cs
+        exists: true
+      - file: Discount.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 9
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  - id: D2-step1-discount-vo
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A3 — Discount VO only
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: *domain_csproj
+      Money.cs: *money_cs
+      Order.cs: *order_cs
+      Order_Tests.cs: *order_tests
+    prompt: |
+      `Order_Tests.cs` exists with 6 new failing tests for a Discount
+      feature. Some of those tests are about the `Discount` VO itself
+      (Percent / Currency / validation).
+
+      Dispatch an implementer to create ONLY `Discount.cs` — a VO with
+      `int Percent` (0-100, throws if out of range) and `string Currency`.
+      Constructor validates both.
+
+      Do NOT modify `Order.cs` — that's the next step. After this step
+      the Discount-VO tests pass but the Order-integration tests still
+      fail (that's expected). Accept_dispatch when the implementer
+      creates the file.
+    timeout_seconds: 300
+    assertions:
+      - file: Discount.cs
+        exists: true
+      - file: Discount.cs
+        content_matches: 'class\s+Discount'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 10
+
+  - id: D2-step2-extend-order
+    taxonomy: *complex_tax
+    description: A6 — Extend Order with ApplyDiscount + DiscountedSubtotal
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: *domain_csproj
+      Money.cs: *money_cs
+      Order.cs: *order_cs
+      Order_Tests.cs: *order_tests
+    prompt: |
+      `Discount.cs` already exists from the prior step. Dispatch an
+      implementer to modify `Order.cs` to add:
+        - `void ApplyDiscount(Discount d)` — throws if d.Currency != Currency
+        - `Money DiscountedSubtotal { get; }` — Subtotal if no discount
+          applied, else Subtotal × (1 − percent/100)
+
+      Keep the 3 existing Order tests green. All 9 tests should pass.
+      Accept_dispatch.
+    timeout_seconds: 360
+    assertions: *d2_assertions

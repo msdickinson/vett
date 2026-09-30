@@ -1,0 +1,1008 @@
+name: team-domain-tier3
+description: |
+  Tier 3: implement a small bounded context — multiple aggregates +
+  a domain service that coordinates them. This is the closest the
+  bench gets to what real DDD tickets look like: multiple files,
+  inter-aggregate communication via events or domain services,
+  invariants enforced across the boundary.
+
+  Per instance:
+    - 1 .NET 10 test project + a comprehensive xUnit suite seeded
+    - Agent creates 3-6 .cs files (aggregates, value objects, services)
+    - dotnet test verifies cross-aggregate behavior
+
+  Run: vett team-bench team-domain-tier3
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  - id: d1-shopping-cart-checkout
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Two-aggregate context: Cart (root, mutable) + Order (root,
+      immutable after Place). A CheckoutService coordinates: takes a
+      Cart, validates it (non-empty, all line currencies match the
+      cart currency), produces an Order, and clears the Cart.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Checkout_Tests.cs: |
+        using System.Linq;
+
+        namespace Domain;
+
+        public class Money_Tests
+        {
+            [Fact]
+            public void Equal_ByValue()
+            {
+                Assert.Equal(new Money(1, "USD"), new Money(1, "USD"));
+                Assert.NotEqual(new Money(1, "USD"), new Money(1, "EUR"));
+            }
+        }
+
+        public class Cart_Tests
+        {
+            [Fact]
+            public void NewCart_Empty_NoTotal()
+            {
+                var c = new Cart("USD");
+                Assert.Empty(c.Items);
+                Assert.Equal(new Money(0, "USD"), c.Total);
+            }
+
+            [Fact]
+            public void AddItem_Accumulates()
+            {
+                var c = new Cart("USD");
+                c.AddItem("WIDGET", 2, new Money(5, "USD"));
+                c.AddItem("GADGET", 1, new Money(10, "USD"));
+                Assert.Equal(2, c.Items.Count);
+                Assert.Equal(new Money(20, "USD"), c.Total);
+            }
+
+            [Fact]
+            public void AddItem_DifferentCurrency_Throws()
+            {
+                var c = new Cart("USD");
+                Assert.ThrowsAny<Exception>(() => c.AddItem("X", 1, new Money(1, "EUR")));
+            }
+
+            [Fact]
+            public void AddItem_NonPositiveQty_Throws()
+            {
+                var c = new Cart("USD");
+                Assert.ThrowsAny<Exception>(() => c.AddItem("X", 0, new Money(1, "USD")));
+                Assert.ThrowsAny<Exception>(() => c.AddItem("X", -1, new Money(1, "USD")));
+            }
+
+            [Fact]
+            public void Clear_RemovesAllItems()
+            {
+                var c = new Cart("USD");
+                c.AddItem("X", 1, new Money(1, "USD"));
+                c.Clear();
+                Assert.Empty(c.Items);
+                Assert.Equal(new Money(0, "USD"), c.Total);
+            }
+        }
+
+        public class Order_Tests
+        {
+            [Fact]
+            public void Order_HasIdAndPlacedAt()
+            {
+                var o = new Order(Guid.NewGuid(), "USD", new[] {
+                    new OrderLine("X", 1, new Money(1, "USD"))
+                });
+                Assert.NotEqual(Guid.Empty, o.Id);
+                Assert.NotEqual(default(DateTimeOffset), o.PlacedAt);
+            }
+
+            [Fact]
+            public void Order_LinesAreImmutable()
+            {
+                var o = new Order(Guid.NewGuid(), "USD", new[] {
+                    new OrderLine("X", 1, new Money(1, "USD"))
+                });
+                // The exposed Lines should not allow mutation.
+                Assert.IsAssignableFrom<System.Collections.Generic.IReadOnlyList<OrderLine>>(o.Lines);
+            }
+
+            [Fact]
+            public void Order_Total_SumsLines()
+            {
+                var o = new Order(Guid.NewGuid(), "USD", new[] {
+                    new OrderLine("A", 2, new Money(5, "USD")),
+                    new OrderLine("B", 1, new Money(3, "USD")),
+                });
+                Assert.Equal(new Money(13, "USD"), o.Total);
+            }
+        }
+
+        public class CheckoutService_Tests
+        {
+            [Fact]
+            public void Checkout_EmptyCart_Throws()
+            {
+                var svc = new CheckoutService();
+                var c = new Cart("USD");
+                Assert.ThrowsAny<Exception>(() => svc.Checkout(c));
+            }
+
+            [Fact]
+            public void Checkout_PopulatedCart_ReturnsOrder()
+            {
+                var svc = new CheckoutService();
+                var c = new Cart("USD");
+                c.AddItem("WIDGET", 2, new Money(5, "USD"));
+                c.AddItem("GADGET", 1, new Money(10, "USD"));
+                var o = svc.Checkout(c);
+                Assert.Equal(2, o.Lines.Count);
+                Assert.Equal(new Money(20, "USD"), o.Total);
+                Assert.Equal("USD", o.Currency);
+            }
+
+            [Fact]
+            public void Checkout_ClearsCart()
+            {
+                var svc = new CheckoutService();
+                var c = new Cart("USD");
+                c.AddItem("X", 1, new Money(1, "USD"));
+                svc.Checkout(c);
+                Assert.Empty(c.Items);
+            }
+
+            [Fact]
+            public void Checkout_TwoCarts_DistinctOrderIds()
+            {
+                var svc = new CheckoutService();
+                var c1 = new Cart("USD"); c1.AddItem("X", 1, new Money(1, "USD"));
+                var c2 = new Cart("USD"); c2.AddItem("Y", 1, new Money(1, "USD"));
+                var o1 = svc.Checkout(c1);
+                var o2 = svc.Checkout(c2);
+                Assert.NotEqual(o1.Id, o2.Id);
+            }
+
+            [Fact]
+            public void Checkout_PreservesLineQuantitiesAndSkus()
+            {
+                var svc = new CheckoutService();
+                var c = new Cart("USD");
+                c.AddItem("WIDGET", 3, new Money(2, "USD"));
+                var o = svc.Checkout(c);
+                var line = o.Lines.Single();
+                Assert.Equal("WIDGET", line.Sku);
+                Assert.Equal(3, line.Quantity);
+                Assert.Equal(new Money(2, "USD"), line.UnitPrice);
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Build a small DDD bounded context for a checkout flow. Create
+      these files in the workspace root, all under the `Domain`
+      namespace:
+
+      1. `Money.cs` — value object
+         - public Money(decimal amount, string currency)
+         - Amount, Currency properties
+         - Add(Money) — throws on currency mismatch
+         - Equals + GetHashCode (value semantics)
+
+      2. `OrderLine.cs` — entity
+         - public OrderLine(string sku, int quantity, Money unitPrice)
+         - Sku, Quantity, UnitPrice properties
+         - Total property (Quantity * UnitPrice.Amount, in UnitPrice.Currency)
+         - throws on Quantity <= 0
+
+      3. `Cart.cs` — aggregate root (MUTABLE)
+         - public Cart(string currency)
+         - Currency property
+         - IReadOnlyList<OrderLine> Items
+         - Money Total (sum of line totals; zero in cart Currency for empty)
+         - public void AddItem(string sku, int quantity, Money unitPrice)
+              throws on currency mismatch or non-positive quantity
+         - public void Clear()  — removes all items
+
+      4. `Order.cs` — aggregate root (IMMUTABLE after construction)
+         - public Order(Guid id, string currency, IEnumerable<OrderLine> lines)
+         - Id, Currency, PlacedAt (set to DateTimeOffset.UtcNow at ctor),
+           Total (sum), IReadOnlyList<OrderLine> Lines
+
+      5. `CheckoutService.cs` — domain service that coordinates Cart→Order
+         - public CheckoutService()
+         - public Order Checkout(Cart cart)
+              - throws if cart is empty
+              - creates a new Order with a fresh Guid, copying lines
+                from the cart and using the cart's currency
+              - calls cart.Clear() so the cart is empty after checkout
+              - returns the new Order
+
+      DO NOT run `dotnet test` yourself — just create the five .cs
+      files and report done; the bench harness verifies. Seeded
+      `Checkout_Tests.cs` has 14 cases (1 Money, 5 Cart, 3 Order,
+      5 CheckoutService); all must pass.
+    timeout_seconds: 720
+    assertions:
+      # NOTE: file: assertions are recursive-search now (model may
+      # place implementation files under a Domain/ subfolder, which
+      # the .NET project still picks up via default glob). We just
+      # rely on dotnet_test as the source of truth.
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 14
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 24
+          leader_iters_max: 18
+
+  - id: d2-bank-transfer
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Two-aggregate context where atomicity matters: Account aggregate
+      (mutable) + TransferService coordinating Transfer(from, to,
+      amount). Cross-aggregate invariant: a failed transfer must leave
+      BOTH accounts unchanged (validate-before-mutate). Tests verify
+      happy path, overdraft rollback, currency-mismatch rollback,
+      same-account rejection, and that successful transfers update both
+      sides exactly once.
+    workspace: empty-git-repo
+    seed_files:
+      Banking.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Banking_Tests.cs: |
+        namespace Domain;
+
+        public class Money_Tests
+        {
+            [Fact]
+            public void Equal_ByValue()
+            {
+                Assert.Equal(new Money(10m, "USD"), new Money(10m, "USD"));
+                Assert.NotEqual(new Money(10m, "USD"), new Money(10m, "EUR"));
+                Assert.NotEqual(new Money(10m, "USD"), new Money(11m, "USD"));
+            }
+        }
+
+        public class Account_Tests
+        {
+            [Fact]
+            public void New_Account_HasIdAndZeroBalance()
+            {
+                var a = new Account("USD");
+                Assert.NotEqual(Guid.Empty, a.Id);
+                Assert.Equal("USD", a.Currency);
+                Assert.Equal(new Money(0m, "USD"), a.Balance);
+            }
+
+            [Fact]
+            public void Deposit_IncreasesBalance()
+            {
+                var a = new Account("USD");
+                a.Deposit(new Money(50m, "USD"));
+                Assert.Equal(new Money(50m, "USD"), a.Balance);
+                a.Deposit(new Money(25m, "USD"));
+                Assert.Equal(new Money(75m, "USD"), a.Balance);
+            }
+
+            [Fact]
+            public void Deposit_NonPositive_Throws()
+            {
+                var a = new Account("USD");
+                Assert.ThrowsAny<Exception>(() => a.Deposit(new Money(0m, "USD")));
+                Assert.ThrowsAny<Exception>(() => a.Deposit(new Money(-1m, "USD")));
+            }
+
+            [Fact]
+            public void Deposit_WrongCurrency_Throws()
+            {
+                var a = new Account("USD");
+                Assert.ThrowsAny<Exception>(() => a.Deposit(new Money(1m, "EUR")));
+            }
+
+            [Fact]
+            public void Withdraw_DecreasesBalance()
+            {
+                var a = new Account("USD");
+                a.Deposit(new Money(100m, "USD"));
+                a.Withdraw(new Money(30m, "USD"));
+                Assert.Equal(new Money(70m, "USD"), a.Balance);
+            }
+
+            [Fact]
+            public void Withdraw_Overdraft_Throws_AndBalanceUnchanged()
+            {
+                var a = new Account("USD");
+                a.Deposit(new Money(10m, "USD"));
+                Assert.ThrowsAny<Exception>(() => a.Withdraw(new Money(11m, "USD")));
+                Assert.Equal(new Money(10m, "USD"), a.Balance);
+            }
+        }
+
+        public class TransferService_Tests
+        {
+            [Fact]
+            public void Transfer_HappyPath_MovesMoney()
+            {
+                var from = new Account("USD"); from.Deposit(new Money(100m, "USD"));
+                var to   = new Account("USD"); to.Deposit(new Money(20m, "USD"));
+                var svc  = new TransferService();
+                svc.Transfer(from, to, new Money(30m, "USD"));
+                Assert.Equal(new Money(70m, "USD"),  from.Balance);
+                Assert.Equal(new Money(50m, "USD"),  to.Balance);
+            }
+
+            [Fact]
+            public void Transfer_Overdraft_Throws_AndBothUnchanged()
+            {
+                var from = new Account("USD"); from.Deposit(new Money(10m, "USD"));
+                var to   = new Account("USD"); to.Deposit(new Money(5m, "USD"));
+                var svc  = new TransferService();
+                Assert.ThrowsAny<Exception>(() => svc.Transfer(from, to, new Money(50m, "USD")));
+                Assert.Equal(new Money(10m, "USD"), from.Balance);
+                Assert.Equal(new Money(5m,  "USD"), to.Balance);
+            }
+
+            [Fact]
+            public void Transfer_CurrencyMismatch_Throws_AndBothUnchanged()
+            {
+                var usd = new Account("USD"); usd.Deposit(new Money(100m, "USD"));
+                var eur = new Account("EUR"); eur.Deposit(new Money(50m,  "EUR"));
+                var svc = new TransferService();
+                Assert.ThrowsAny<Exception>(() => svc.Transfer(usd, eur, new Money(10m, "USD")));
+                Assert.Equal(new Money(100m, "USD"), usd.Balance);
+                Assert.Equal(new Money(50m,  "EUR"), eur.Balance);
+            }
+
+            [Fact]
+            public void Transfer_SameAccount_Throws()
+            {
+                var a   = new Account("USD"); a.Deposit(new Money(100m, "USD"));
+                var svc = new TransferService();
+                Assert.ThrowsAny<Exception>(() => svc.Transfer(a, a, new Money(10m, "USD")));
+                Assert.Equal(new Money(100m, "USD"), a.Balance);
+            }
+
+            [Fact]
+            public void Transfer_NonPositiveAmount_Throws()
+            {
+                var from = new Account("USD"); from.Deposit(new Money(100m, "USD"));
+                var to   = new Account("USD");
+                var svc  = new TransferService();
+                Assert.ThrowsAny<Exception>(() => svc.Transfer(from, to, new Money(0m,  "USD")));
+                Assert.ThrowsAny<Exception>(() => svc.Transfer(from, to, new Money(-1m, "USD")));
+            }
+
+            [Fact]
+            public void Transfer_TwiceInARow_StateIsConsistent()
+            {
+                var from = new Account("USD"); from.Deposit(new Money(100m, "USD"));
+                var to   = new Account("USD");
+                var svc  = new TransferService();
+                svc.Transfer(from, to, new Money(40m, "USD"));
+                svc.Transfer(from, to, new Money(10m, "USD"));
+                Assert.Equal(new Money(50m, "USD"), from.Balance);
+                Assert.Equal(new Money(50m, "USD"), to.Balance);
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Build a small DDD bounded context for bank-account transfers.
+      Create these files in the workspace root, all under the `Domain`
+      namespace:
+
+      1. `Money.cs` — value object
+         - public Money(decimal amount, string currency)
+         - public decimal Amount   { get; }
+         - public string  Currency { get; }
+         - override Equals + GetHashCode (value semantics)
+
+      2. `Account.cs` — aggregate root (MUTABLE)
+         - public Account(string currency)
+         - public Guid    Id       { get; }                    // generated in ctor
+         - public string  Currency { get; }
+         - public Money   Balance  { get; private set; }       // starts at 0 in Currency; mutated by Deposit/Withdraw
+         - public void Deposit(Money amount)
+              throws on currency mismatch or non-positive amount.
+         - public void Withdraw(Money amount)
+              throws on currency mismatch, non-positive amount, or
+              insufficient funds (Balance.Amount < amount.Amount).
+              MUST not partially mutate on a failed withdraw.
+
+      3. `TransferService.cs` — domain service
+         - public TransferService()
+         - public void Transfer(Account from, Account to, Money amount)
+              VALIDATE FIRST (no mutation): from != to (same instance);
+              amount > 0; from.Currency == to.Currency == amount.Currency;
+              from.Balance.Amount >= amount.Amount.
+              Only AFTER all validations pass: from.Withdraw(amount);
+              to.Deposit(amount).
+              On any validation failure throw — both accounts must be
+              unchanged. (Don't catch + rollback; just validate first.)
+
+      Create exactly these three files in THIS ORDER, each at the
+      workspace root: `Money.cs`, then `Account.cs`, then
+      `TransferService.cs`. After each `file_editor.create` call
+      succeeds, MOVE ON to the next file — do NOT view it back to
+      verify; the harness will run the tests.
+
+      DO NOT run `dotnet test` yourself — just create the three .cs
+      files and report done; the bench harness verifies. Seeded
+      `Banking_Tests.cs` has 12 cases (1 Money, 5 Account, 6 Transfer);
+      all must pass.
+    timeout_seconds: 720
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 12
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 24
+          leader_iters_max: 18
+
+  - id: d3-event-sourcing
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Event-sourced aggregate: BankAccount built from a stream of
+      domain events. Aggregate exposes Open / Deposit / Withdraw which
+      append to UncommittedEvents. A static `Replay(events)` factory
+      rebuilds the aggregate from a known event stream and produces
+      the same final state. Tests verify that mutations, replay, and
+      uncommitted-event-clearing all behave consistently.
+    workspace: empty-git-repo
+    seed_files:
+      EventSourced.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      EventSourced_Tests.cs: |
+        using System.Linq;
+
+        namespace Domain;
+
+        public class BankAccount_Tests
+        {
+            [Fact]
+            public void Open_AppendsAccountOpenedEvent()
+            {
+                var id = Guid.NewGuid();
+                var a  = BankAccount.Open(id, "USD");
+                Assert.Equal(id, a.Id);
+                Assert.Equal("USD", a.Currency);
+                Assert.Equal(0m, a.Balance);
+                var e = a.UncommittedEvents.Single();
+                Assert.IsType<AccountOpened>(e);
+            }
+
+            [Fact]
+            public void Deposit_AppendsMoneyDepositedAndUpdatesBalance()
+            {
+                var a = BankAccount.Open(Guid.NewGuid(), "USD");
+                a.Deposit(100m);
+                Assert.Equal(100m, a.Balance);
+                Assert.IsType<MoneyDeposited>(a.UncommittedEvents.Last());
+            }
+
+            [Fact]
+            public void Withdraw_AppendsMoneyWithdrawnAndUpdatesBalance()
+            {
+                var a = BankAccount.Open(Guid.NewGuid(), "USD");
+                a.Deposit(100m);
+                a.Withdraw(30m);
+                Assert.Equal(70m, a.Balance);
+                Assert.IsType<MoneyWithdrawn>(a.UncommittedEvents.Last());
+            }
+
+            [Fact]
+            public void Withdraw_Overdraft_Throws_NoEventAppended()
+            {
+                var a = BankAccount.Open(Guid.NewGuid(), "USD");
+                a.Deposit(10m);
+                var before = a.UncommittedEvents.Count;
+                Assert.ThrowsAny<Exception>(() => a.Withdraw(11m));
+                Assert.Equal(before, a.UncommittedEvents.Count);
+                Assert.Equal(10m, a.Balance);
+            }
+
+            [Fact]
+            public void Deposit_NonPositive_Throws()
+            {
+                var a = BankAccount.Open(Guid.NewGuid(), "USD");
+                Assert.ThrowsAny<Exception>(() => a.Deposit(0m));
+                Assert.ThrowsAny<Exception>(() => a.Deposit(-1m));
+            }
+
+            [Fact]
+            public void MarkEventsCommitted_ClearsUncommitted()
+            {
+                var a = BankAccount.Open(Guid.NewGuid(), "USD");
+                a.Deposit(50m);
+                Assert.NotEmpty(a.UncommittedEvents);
+                a.MarkEventsCommitted();
+                Assert.Empty(a.UncommittedEvents);
+                Assert.Equal(50m, a.Balance);  // state preserved
+            }
+        }
+
+        public class Replay_Tests
+        {
+            [Fact]
+            public void Replay_RebuildsSameState()
+            {
+                var id = Guid.NewGuid();
+                var live = BankAccount.Open(id, "USD");
+                live.Deposit(100m);
+                live.Withdraw(40m);
+                live.Deposit(25m);
+
+                var stream  = live.UncommittedEvents.ToList();
+                var rebuilt = BankAccount.Replay(stream);
+
+                Assert.Equal(live.Id, rebuilt.Id);
+                Assert.Equal(live.Currency, rebuilt.Currency);
+                Assert.Equal(live.Balance, rebuilt.Balance);
+                Assert.Equal(85m, rebuilt.Balance);
+            }
+
+            [Fact]
+            public void Replay_ResultHasNoUncommittedEvents()
+            {
+                var live = BankAccount.Open(Guid.NewGuid(), "USD");
+                live.Deposit(50m);
+                var rebuilt = BankAccount.Replay(live.UncommittedEvents);
+                Assert.Empty(rebuilt.UncommittedEvents);
+            }
+
+            [Fact]
+            public void Replay_EmptyStream_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => BankAccount.Replay(Array.Empty<IDomainEvent>()));
+            }
+
+            [Fact]
+            public void Replay_FirstEventNotAccountOpened_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => BankAccount.Replay(new IDomainEvent[]
+                {
+                    new MoneyDeposited(Guid.NewGuid(), 10m),
+                }));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Build a small event-sourced DDD aggregate. Create these files
+      in the workspace root, all under the `Domain` namespace:
+
+      1. `IDomainEvent.cs` — marker interface
+         - public interface IDomainEvent { }
+
+      2. `Events.cs` — three record types implementing IDomainEvent
+         - public sealed record AccountOpened(Guid AccountId, string Currency) : IDomainEvent;
+         - public sealed record MoneyDeposited(Guid AccountId, decimal Amount) : IDomainEvent;
+         - public sealed record MoneyWithdrawn(Guid AccountId, decimal Amount) : IDomainEvent;
+
+      3. `BankAccount.cs` — the aggregate root
+         - public Guid    Id       { get; private set; }
+         - public string  Currency { get; private set; } = "";
+         - public decimal Balance  { get; private set; }
+         - public IReadOnlyList<IDomainEvent> UncommittedEvents { get; }
+         - private constructor (only Open / Replay create instances)
+         - public static BankAccount Open(Guid id, string currency)
+              creates a new aggregate, applies AccountOpened, appends
+              it to UncommittedEvents.
+         - public void Deposit(decimal amount)
+              throws if amount <= 0; otherwise applies MoneyDeposited
+              and appends to UncommittedEvents.
+         - public void Withdraw(decimal amount)
+              throws if amount <= 0 or amount > Balance; otherwise
+              applies MoneyWithdrawn and appends to UncommittedEvents.
+              MUST NOT append on a failed withdraw.
+         - public void MarkEventsCommitted()
+              clears the UncommittedEvents list (state is preserved).
+         - public static BankAccount Replay(IEnumerable<IDomainEvent> events)
+              throws if the stream is empty or if the first event is
+              not AccountOpened. Otherwise applies each event in
+              order and returns an aggregate with EMPTY
+              UncommittedEvents (replayed events are already persisted).
+
+      All "apply" logic should mutate state without throwing — the
+      Open / Deposit / Withdraw methods are the only place that
+      validates and throws. Replay assumes a valid stream and just
+      mutates.
+
+      IMPORTANT — Replay must produce EMPTY UncommittedEvents.
+      Replayed events are already persisted, so Replay must not
+      record them again. Easy patterns:
+        (a) Make state-mutation a separate method (e.g. `When(evt)`)
+            from event-recording; Open/Deposit/Withdraw call When THEN
+            append; Replay calls When ONLY.
+        (b) Or: in Replay, after applying every event, call
+            `MarkEventsCommitted()` to clear the list before returning.
+      Either pattern works — pick one and stay consistent.
+
+      IMPORTANT — the state-mutation method (When/Apply) must set
+      ALL aggregate fields from each event, not just some. For
+      `AccountOpened`: set Id, Currency, AND Balance=0 from the
+      event payload. Do NOT set Id outside of When/Apply (e.g. in
+      Open) — if you set it outside, Replay won't reproduce it and
+      `Replay_RebuildsSameState` will fail with Id == Guid.Empty.
+      The whole point of event sourcing is that the event stream
+      is the SINGLE source of truth for state.
+
+      Create exactly these three files in THIS ORDER, each at the
+      workspace root: `IDomainEvent.cs`, then `Events.cs`, then
+      `BankAccount.cs`. After each `file_editor.create` succeeds,
+      MOVE ON — do NOT view it back to verify; the harness runs
+      the tests.
+
+      DO NOT run `dotnet test` yourself — just create the three .cs
+      files and report done; the bench harness verifies. Seeded
+      `EventSourced_Tests.cs` has 10 cases covering aggregate
+      mutations, replay, and event-clearing behavior.
+    timeout_seconds: 720
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 10
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 28
+          leader_iters_max: 18
+
+  - id: d4-cross-context-acl
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "high"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Two bounded contexts (Sales + Inventory) collaborating through
+      an Anti-Corruption Layer. Sales owns SalesOrder/SalesLineItem
+      with `ProductCode`. Inventory owns its own per-SKU stock model.
+      The ACL translates a SalesOrder into Inventory reservation
+      operations using a product-code → SKU map. Tests verify the
+      translation produces the right Inventory state and that an
+      unmapped product code is rejected before any Inventory mutation
+      happens.
+    workspace: empty-git-repo
+    seed_files:
+      Acl.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <AssemblyName>Acl</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Acl_Tests.cs: |
+        using System.Collections.Generic;
+        using System.Linq;
+        using Sales;
+        using Inv = Inventory;
+        using AclNs = Acl;
+
+        public class SalesOrder_Tests
+        {
+            [Fact]
+            public void SalesOrder_Holds_Lines()
+            {
+                var so = new SalesOrder("CUST-1", new[]
+                {
+                    new SalesLineItem("PROD-A", 2),
+                    new SalesLineItem("PROD-B", 1),
+                });
+                Assert.Equal("CUST-1", so.CustomerId);
+                Assert.Equal(2, so.Lines.Count);
+                Assert.Equal("PROD-A", so.Lines[0].ProductCode);
+            }
+        }
+
+        public class Inventory_Tests
+        {
+            [Fact]
+            public void Restock_Then_Available()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 10);
+                Assert.Equal(10, inv.AvailableOf("SKU-A"));
+            }
+
+            [Fact]
+            public void Reserve_Decrements_Available()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 10);
+                inv.Reserve("SKU-A", 3);
+                Assert.Equal(7, inv.AvailableOf("SKU-A"));
+                Assert.Equal(3, inv.ReservedOf("SKU-A"));
+            }
+
+            [Fact]
+            public void Reserve_OverAvailable_Throws()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 2);
+                Assert.ThrowsAny<Exception>(() => inv.Reserve("SKU-A", 3));
+            }
+        }
+
+        public class Translator_Tests
+        {
+            private static Dictionary<string, string> Map() => new()
+            {
+                ["PROD-A"] = "SKU-A",
+                ["PROD-B"] = "SKU-B",
+            };
+
+            [Fact]
+            public void Reserve_HappyPath_DecrementsBothSkus()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 10);
+                inv.Restock("SKU-B", 10);
+
+                var so = new SalesOrder("C", new[]
+                {
+                    new SalesLineItem("PROD-A", 2),
+                    new SalesLineItem("PROD-B", 1),
+                });
+
+                var t = new AclNs.SalesToInventoryTranslator(Map());
+                t.Reserve(so, inv);
+
+                Assert.Equal(8, inv.AvailableOf("SKU-A"));
+                Assert.Equal(9, inv.AvailableOf("SKU-B"));
+                Assert.Equal(2, inv.ReservedOf("SKU-A"));
+                Assert.Equal(1, inv.ReservedOf("SKU-B"));
+            }
+
+            [Fact]
+            public void Reserve_UnknownProductCode_Throws_BeforeAnyMutation()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 10);
+                inv.Restock("SKU-B", 10);
+
+                var so = new SalesOrder("C", new[]
+                {
+                    new SalesLineItem("PROD-A", 2),
+                    new SalesLineItem("PROD-UNKNOWN", 1),
+                });
+
+                var t = new AclNs.SalesToInventoryTranslator(Map());
+                Assert.ThrowsAny<Exception>(() => t.Reserve(so, inv));
+                // ACL must validate the entire order BEFORE mutating
+                // inventory — so SKU-A must NOT have been decremented.
+                Assert.Equal(10, inv.AvailableOf("SKU-A"));
+                Assert.Equal(0,  inv.ReservedOf("SKU-A"));
+            }
+
+            [Fact]
+            public void Reserve_InsufficientStock_Throws_BeforeAnyMutation()
+            {
+                var inv = new Inv.InventoryStore();
+                inv.Restock("SKU-A", 1);
+                inv.Restock("SKU-B", 10);
+
+                var so = new SalesOrder("C", new[]
+                {
+                    new SalesLineItem("PROD-A", 2),  // exceeds SKU-A stock
+                    new SalesLineItem("PROD-B", 1),
+                });
+
+                var t = new AclNs.SalesToInventoryTranslator(Map());
+                Assert.ThrowsAny<Exception>(() => t.Reserve(so, inv));
+                Assert.Equal(1,  inv.AvailableOf("SKU-A"));
+                Assert.Equal(10, inv.AvailableOf("SKU-B"));
+                Assert.Equal(0,  inv.ReservedOf("SKU-A"));
+                Assert.Equal(0,  inv.ReservedOf("SKU-B"));
+            }
+        }
+
+        public class ContextBoundary_Tests
+        {
+            [Fact]
+            public void Inventory_Namespace_Has_No_Sales_Types()
+            {
+                var asm = typeof(Inv.InventoryStore).Assembly;
+                var inventoryTypeNames = asm.GetTypes()
+                    .Where(t => t.Namespace == "Inventory")
+                    .Select(t => t.Name).ToList();
+                Assert.DoesNotContain("SalesOrder",    inventoryTypeNames);
+                Assert.DoesNotContain("SalesLineItem", inventoryTypeNames);
+            }
+
+            [Fact]
+            public void Sales_Namespace_Has_No_Inventory_Types()
+            {
+                var asm = typeof(SalesOrder).Assembly;
+                var salesTypeNames = asm.GetTypes()
+                    .Where(t => t.Namespace == "Sales")
+                    .Select(t => t.Name).ToList();
+                Assert.DoesNotContain("InventoryStore", salesTypeNames);
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Build TWO bounded contexts (Sales, Inventory) plus a thin
+      Anti-Corruption Layer (Acl) that bridges them. Use SEPARATE
+      C# namespaces — do NOT cross-reference types between the
+      Sales and Inventory namespaces.
+
+      Create these files:
+
+      1. `Sales/SalesOrder.cs`  (namespace `Sales`)
+         - public sealed class SalesLineItem
+              public SalesLineItem(string productCode, int quantity)
+              public string ProductCode { get; }
+              public int    Quantity    { get; }
+         - public sealed class SalesOrder
+              public SalesOrder(string customerId, IEnumerable<SalesLineItem> lines)
+              public string CustomerId { get; }
+              public IReadOnlyList<SalesLineItem> Lines { get; }
+         - DO NOT reference any Inventory.* type.
+
+      2. `Inventory/InventoryStore.cs`  (namespace `Inventory`)
+         - public sealed class InventoryStore
+              public InventoryStore()
+              public int AvailableOf(string sku)   // 0 if unknown
+              public int ReservedOf(string sku)    // 0 if unknown
+              public void Restock(string sku, int qty)   // qty > 0
+              public void Reserve(string sku, int qty)
+                  // throws if Available < qty (covers unknown SKU)
+                  // moves qty from Available to Reserved
+         - DO NOT reference any Sales.* type.
+         - NOTE: the class is named `InventoryStore` (not `Inventory`)
+           because that name would clash with the `Inventory` namespace.
+
+      3. `Acl/SalesToInventoryTranslator.cs`  (namespace `Acl`)
+         - using Sales; using Inventory;
+         - public sealed class SalesToInventoryTranslator
+              public SalesToInventoryTranslator(IReadOnlyDictionary<string, string> productCodeToSku)
+              public void Reserve(Sales.SalesOrder order, Inventory.InventoryStore inv)
+                  STEP 1 (validate, no mutation): for every line in
+                    order.Lines, look up the SKU; throw if unknown.
+                    Then check inv.AvailableOf(sku) >= qty; throw if not.
+                  STEP 2 (mutate): only after ALL lines validate, call
+                    inv.Reserve(sku, qty) for each.
+              The validate-before-mutate ordering is the whole point —
+              an invalid order must leave Inventory untouched.
+
+      Folder layout: feel free to put each file in a `Sales/`,
+      `Inventory/`, `Acl/` subfolder respectively, or all at the
+      workspace root — `dotnet build` picks both up via the default
+      .csproj glob.
+
+      Create exactly these three files in THIS ORDER:
+      `Sales/SalesOrder.cs`, then `Inventory/InventoryStore.cs`, then
+      `Acl/SalesToInventoryTranslator.cs`. After each
+      `file_editor.create` succeeds, MOVE ON — do NOT view it back
+      to verify; the harness runs the tests.
+
+      DO NOT run `dotnet test` yourself — just create the three .cs
+      files and report done; the bench harness verifies. Seeded
+      `Acl_Tests.cs` has 9 cases covering each context plus the
+      translator AND a structural "no leakage" test.
+    timeout_seconds: 720
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 9
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 18
+

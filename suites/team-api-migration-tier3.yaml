@@ -1,0 +1,797 @@
+name: team-api-migration-tier3
+description: |
+  A11 — API Surface Migration. Rename / reshape a public method or
+  type and update EVERY caller across the codebase. Tests are written
+  against the NEW surface and must pass after migration. Production
+  must compile + tests must pass with zero `obsolete` references to
+  the old name.
+
+  Key risk: partial migration. Agent updates 2 of 3 call sites, the
+  third still compiles because (a) it's in a separate file the agent
+  didn't search, or (b) it was masked by an alias. Suite forces
+  cross-file consistency by giving each instance ≥3 call sites in
+  different files.
+
+  Run: vett team-bench team-api-migration-tier3
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  # ============================================================
+  # am1 — Rename method on interface (interface + impl + 3 callers)
+  # ============================================================
+  - id: am1-rename-method
+    taxonomy: &a11_tax
+      # file_count_bucket counts files the task is EXPECTED TO TOUCH
+      # (defaults/taxonomy.yaml), not files seeded. Every am* instance
+      # edits 3-5 sources (target + callers; am4 also adds
+      # TaxCalculator.cs) and never edits the seeded Migration_Tests.cs,
+      # so all six share this anchor legitimately. Was "5-10", a value
+      # that has never existed in the schema.
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A11 — Rename `IPricer.Calculate(order)` to `IPricer.PriceOrder(order)`
+      across interface, implementation, and 3 caller classes.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Order.cs: |
+        namespace Migration;
+
+        public record Order(string Sku, int Quantity, decimal UnitPrice);
+      IPricer.cs: |
+        namespace Migration;
+
+        public interface IPricer
+        {
+            decimal Calculate(Order order);
+        }
+      DefaultPricer.cs: |
+        namespace Migration;
+
+        public class DefaultPricer : IPricer
+        {
+            public decimal Calculate(Order order) => order.Quantity * order.UnitPrice;
+        }
+      InvoiceBuilder.cs: |
+        namespace Migration;
+
+        public class InvoiceBuilder
+        {
+            private readonly IPricer _pricer;
+            public InvoiceBuilder(IPricer pricer) => _pricer = pricer;
+            public string BuildLine(Order o) => $"{o.Sku}: {_pricer.Calculate(o):F2}";
+        }
+      ReceiptPrinter.cs: |
+        namespace Migration;
+
+        public class ReceiptPrinter
+        {
+            private readonly IPricer _pricer;
+            public ReceiptPrinter(IPricer pricer) => _pricer = pricer;
+            public decimal Total(IEnumerable<Order> orders) => orders.Sum(o => _pricer.Calculate(o));
+        }
+      CheckoutFlow.cs: |
+        namespace Migration;
+
+        public class CheckoutFlow
+        {
+            private readonly IPricer _pricer;
+            public CheckoutFlow(IPricer pricer) => _pricer = pricer;
+            public bool Authorize(Order o, decimal limit) => _pricer.Calculate(o) <= limit;
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            private readonly IPricer _p = new DefaultPricer();
+
+            [Fact] public void Pricer_PriceOrder_Method_Exists()
+            {
+                // The migration must rename Calculate -> PriceOrder.
+                var m = typeof(IPricer).GetMethod("PriceOrder");
+                Assert.NotNull(m);
+            }
+            [Fact] public void Pricer_OldName_IsGone()
+            {
+                Assert.Null(typeof(IPricer).GetMethod("Calculate"));
+            }
+            [Fact] public void DefaultPricer_PriceOrder_Computes()
+            {
+                Assert.Equal(20m, _p.PriceOrder(new Order("X", 2, 10m)));
+            }
+            [Fact] public void InvoiceBuilder_Uses_PriceOrder()
+                => Assert.Equal("X: 20.00", new InvoiceBuilder(_p).BuildLine(new Order("X", 2, 10m)));
+            [Fact] public void ReceiptPrinter_Uses_PriceOrder()
+            {
+                var rp = new ReceiptPrinter(_p);
+                Assert.Equal(50m, rp.Total(new[] { new Order("A", 2, 10m), new Order("B", 1, 30m) }));
+            }
+            [Fact] public void CheckoutFlow_Uses_PriceOrder()
+            {
+                var cf = new CheckoutFlow(_p);
+                Assert.True(cf.Authorize(new Order("X", 2, 10m), 25m));
+                Assert.False(cf.Authorize(new Order("Y", 2, 20m), 25m));
+            }
+        }
+    prompt: |
+      Migration task: rename the method `Calculate` on `IPricer` (and
+      its implementation `DefaultPricer`) to `PriceOrder`. The body and
+      signature are identical — only the name changes.
+
+      You MUST also update every call site so the codebase still
+      compiles. The tests use the NEW name; the old name must be
+      completely gone.
+
+      Dispatch an implementer to:
+        1. Rename in `IPricer.cs` and `DefaultPricer.cs`.
+        2. Find and update every other file that calls
+           `pricer.Calculate(...)` — there are multiple.
+        3. Run `dotnet test`. All 6 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 600
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 6
+          max_failed: 0
+      - file: IPricer.cs
+        content_matches: 'PriceOrder'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 26
+
+  # ============================================================
+  # am2 — Rename a CLASS used across the codebase
+  # ============================================================
+  - id: am2-rename-class
+    taxonomy: *a11_tax
+    description: |
+      A11 — Rename class `MailSender` → `EmailDispatcher` everywhere.
+      File rename + all `new`/type references in 4 files.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      MailSender.cs: |
+        namespace Migration;
+
+        // Should be renamed to EmailDispatcher (and the file too).
+        public class MailSender
+        {
+            public List<string> Sent { get; } = new();
+            public void Send(string to, string body) => Sent.Add($"{to}|{body}");
+        }
+      OrderConfirmation.cs: |
+        namespace Migration;
+
+        public class OrderConfirmation
+        {
+            private readonly MailSender _mailer;
+            public OrderConfirmation(MailSender mailer) => _mailer = mailer;
+            public void Confirm(string customer, string sku) => _mailer.Send(customer, $"confirmed:{sku}");
+        }
+      PasswordReset.cs: |
+        namespace Migration;
+
+        public class PasswordReset
+        {
+            private readonly MailSender _mailer;
+            public PasswordReset(MailSender mailer) => _mailer = mailer;
+            public void Request(string customer) => _mailer.Send(customer, "reset");
+        }
+      WelcomeEmail.cs: |
+        namespace Migration;
+
+        public class WelcomeEmail
+        {
+            private readonly MailSender _mailer;
+            public WelcomeEmail(MailSender mailer) => _mailer = mailer;
+            public void Greet(string customer) => _mailer.Send(customer, "welcome");
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            [Fact] public void EmailDispatcher_TypeExists()
+            {
+                var t = Type.GetType("Migration.EmailDispatcher, Migration", throwOnError: false);
+                Assert.NotNull(t);
+            }
+            [Fact] public void MailSender_TypeIsGone()
+            {
+                var t = Type.GetType("Migration.MailSender, Migration", throwOnError: false);
+                Assert.Null(t);
+            }
+            [Fact] public void OrderConfirmation_UsesEmailDispatcher()
+            {
+                var d = new EmailDispatcher();
+                new OrderConfirmation(d).Confirm("alice@x.com", "SKU1");
+                Assert.Equal("alice@x.com|confirmed:SKU1", d.Sent[0]);
+            }
+            [Fact] public void PasswordReset_UsesEmailDispatcher()
+            {
+                var d = new EmailDispatcher();
+                new PasswordReset(d).Request("bob@x.com");
+                Assert.Equal("bob@x.com|reset", d.Sent[0]);
+            }
+            [Fact] public void WelcomeEmail_UsesEmailDispatcher()
+            {
+                var d = new EmailDispatcher();
+                new WelcomeEmail(d).Greet("carol@x.com");
+                Assert.Equal("carol@x.com|welcome", d.Sent[0]);
+            }
+        }
+    prompt: |
+      Migration task: rename the class `MailSender` to `EmailDispatcher`
+      everywhere. Public API (method names) stays the same — only the
+      type name changes.
+
+      Dispatch an implementer to:
+        1. Rename the class declaration in `MailSender.cs`. Rename the
+           file to `EmailDispatcher.cs` (create new, delete old).
+        2. Update every other file that references `MailSender`.
+        3. The old type name must NOT exist anywhere in production
+           code. Tests use the new name.
+        4. All 5 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 600
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 5
+          max_failed: 0
+      - file: EmailDispatcher.cs
+        exists: true
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 26
+
+  # ============================================================
+  # am3 — Add required parameter to a method (every caller updates)
+  # ============================================================
+  - id: am3-add-required-param
+    taxonomy: *a11_tax
+    description: |
+      A11 — Add a required `userId` (int) parameter to
+      `AuditLog.Record(string event)` → `AuditLog.Record(int userId, string event)`.
+      All 3 callers must pass the new param.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      AuditLog.cs: |
+        namespace Migration;
+
+        public class AuditLog
+        {
+            public List<string> Entries { get; } = new();
+            // Migration: add `int userId` as a first parameter. Format becomes "user:{id}|{evt}".
+            public void Record(string evt) => Entries.Add(evt);
+        }
+      LoginService.cs: |
+        namespace Migration;
+
+        public class LoginService
+        {
+            private readonly AuditLog _audit;
+            public LoginService(AuditLog audit) => _audit = audit;
+            public bool Login(int userId, string password)
+            {
+                // Pretend to check.
+                _audit.Record("login");
+                return password == "ok";
+            }
+        }
+      ProfileEditor.cs: |
+        namespace Migration;
+
+        public class ProfileEditor
+        {
+            private readonly AuditLog _audit;
+            public ProfileEditor(AuditLog audit) => _audit = audit;
+            public void Rename(int userId, string newName)
+            {
+                _audit.Record("rename");
+            }
+        }
+      AdminTool.cs: |
+        namespace Migration;
+
+        public class AdminTool
+        {
+            private readonly AuditLog _audit;
+            public AdminTool(AuditLog audit) => _audit = audit;
+            public void Ban(int userId, string reason)
+            {
+                _audit.Record($"ban:{reason}");
+            }
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            [Fact] public void Record_RequiresUserId_Signature()
+            {
+                var m = typeof(AuditLog).GetMethod("Record",
+                    new[] { typeof(int), typeof(string) });
+                Assert.NotNull(m);
+            }
+            [Fact] public void Login_LogsWithUserId()
+            {
+                var a = new AuditLog();
+                new LoginService(a).Login(42, "ok");
+                Assert.Equal("user:42|login", a.Entries[0]);
+            }
+            [Fact] public void Rename_LogsWithUserId()
+            {
+                var a = new AuditLog();
+                new ProfileEditor(a).Rename(7, "newname");
+                Assert.Equal("user:7|rename", a.Entries[0]);
+            }
+            [Fact] public void Ban_LogsWithUserId()
+            {
+                var a = new AuditLog();
+                new AdminTool(a).Ban(99, "abuse");
+                Assert.Equal("user:99|ban:abuse", a.Entries[0]);
+            }
+        }
+    prompt: |
+      Migration task: change `AuditLog.Record(string evt)` to
+      `AuditLog.Record(int userId, string evt)`. The body must format
+      each entry as `"user:{userId}|{evt}"`.
+
+      Every caller (`LoginService.Login`, `ProfileEditor.Rename`,
+      `AdminTool.Ban`) already has a `userId` local in scope — pass it
+      through.
+
+      Dispatch an implementer to:
+        1. Change `AuditLog.Record` signature + body.
+        2. Update every caller to pass the userId.
+        3. All 4 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 900
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 540
+          min_passed: 4
+          max_failed: 0
+      - file: AuditLog.cs
+        content_matches: 'int userId'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 26
+
+  # ============================================================
+  # am4 — Move a method from one class to another
+  # ============================================================
+  - id: am4-move-method
+    taxonomy: *a11_tax
+    description: |
+      A11 — Move `CalcTax(decimal subtotal)` from `OrderService` to a
+      new `TaxCalculator` class. Callers must use `TaxCalculator.For(...)`.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      OrderService.cs: |
+        namespace Migration;
+
+        public class OrderService
+        {
+            // Migration: move this into a new TaxCalculator class
+            // named `For(decimal subtotal)`. Remove from OrderService.
+            public decimal CalcTax(decimal subtotal) => subtotal * 0.08m;
+
+            public decimal Total(decimal subtotal) => subtotal + CalcTax(subtotal);
+        }
+      Quote.cs: |
+        namespace Migration;
+
+        public class Quote
+        {
+            private readonly OrderService _svc;
+            public Quote(OrderService svc) => _svc = svc;
+            // Migration: should call TaxCalculator.For(subtotal) instead.
+            public decimal TaxLine(decimal subtotal) => _svc.CalcTax(subtotal);
+        }
+      Receipt.cs: |
+        namespace Migration;
+
+        public class Receipt
+        {
+            private readonly OrderService _svc;
+            public Receipt(OrderService svc) => _svc = svc;
+            // Migration: should call TaxCalculator.For(subtotal) instead.
+            public string Format(decimal subtotal) => $"tax: {_svc.CalcTax(subtotal):F2}";
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            [Fact] public void TaxCalculator_For_Exists()
+            {
+                var m = typeof(TaxCalculator).GetMethod("For",
+                    new[] { typeof(decimal) });
+                Assert.NotNull(m);
+            }
+            [Fact] public void OrderService_CalcTax_IsRemoved()
+            {
+                Assert.Null(typeof(OrderService).GetMethod("CalcTax"));
+            }
+            [Fact] public void TaxCalculator_For_Computes()
+                => Assert.Equal(8m, TaxCalculator.For(100m));
+            [Fact] public void OrderService_Total_StillWorks()
+                => Assert.Equal(108m, new OrderService().Total(100m));
+            [Fact] public void Quote_UsesTaxCalculator()
+                => Assert.Equal(8m, new Quote(new OrderService()).TaxLine(100m));
+            [Fact] public void Receipt_UsesTaxCalculator()
+                => Assert.Equal("tax: 8.00", new Receipt(new OrderService()).Format(100m));
+        }
+    prompt: |
+      Migration task: move the `CalcTax(decimal subtotal)` method off
+      `OrderService` and onto a new STATIC class `TaxCalculator` with
+      method `For(decimal subtotal)`. Logic is unchanged (returns
+      `subtotal * 0.08m`).
+
+      `OrderService.CalcTax` must be REMOVED entirely. `OrderService.Total`
+      must keep working — update it to call `TaxCalculator.For` instead.
+      Update `Quote.TaxLine` and `Receipt.Format` to call
+      `TaxCalculator.For` directly (they currently go through `_svc.CalcTax`).
+
+      Dispatch an implementer:
+        1. Create `TaxCalculator.cs` with static `For(decimal)` method.
+        2. Remove `CalcTax` from `OrderService`; update `Total`.
+        3. Update `Quote.TaxLine` and `Receipt.Format`.
+        4. All 6 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 600
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 6
+          max_failed: 0
+      - file: TaxCalculator.cs
+        exists: true
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 26
+
+  # ============================================================
+  # am5 — Split a method into Validate + Apply
+  # ============================================================
+  - id: am5-split-method
+    taxonomy: *a11_tax
+    description: |
+      A11 — Split `CouponService.Redeem(code, amount)` into two
+      methods: `Validate(code)` (returns bool) + `Apply(code, amount)`
+      (returns discounted amount). All 3 callers must use new shape.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      CouponService.cs: |
+        namespace Migration;
+
+        public class CouponService
+        {
+            private static readonly HashSet<string> Known = new() { "SAVE10", "BIG20" };
+
+            // Migration: split into two methods:
+            //   bool Validate(string code) — true if known
+            //   decimal Apply(string code, decimal amount) — assumes code is valid;
+            //                                                 SAVE10 = 10% off, BIG20 = 20% off
+            public decimal Redeem(string code, decimal amount)
+            {
+                if (!Known.Contains(code)) return amount;
+                var rate = code == "SAVE10" ? 0.10m : 0.20m;
+                return amount * (1 - rate);
+            }
+        }
+      Checkout.cs: |
+        namespace Migration;
+
+        public class Checkout
+        {
+            private readonly CouponService _coupons;
+            public Checkout(CouponService coupons) => _coupons = coupons;
+            // Migration: should call Validate first, then Apply.
+            public decimal Charge(string code, decimal amount) => _coupons.Redeem(code, amount);
+        }
+      CartPreview.cs: |
+        namespace Migration;
+
+        public class CartPreview
+        {
+            private readonly CouponService _coupons;
+            public CartPreview(CouponService coupons) => _coupons = coupons;
+            // Migration: should call Validate first, then Apply.
+            public decimal Preview(string code, decimal amount) => _coupons.Redeem(code, amount);
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            [Fact] public void Validate_Exists()
+                => Assert.NotNull(typeof(CouponService).GetMethod("Validate"));
+            [Fact] public void Apply_Exists()
+                => Assert.NotNull(typeof(CouponService).GetMethod("Apply"));
+            [Fact] public void Redeem_Removed()
+                => Assert.Null(typeof(CouponService).GetMethod("Redeem"));
+            [Fact] public void Validate_KnownCode()
+                => Assert.True(new CouponService().Validate("SAVE10"));
+            [Fact] public void Validate_UnknownCode()
+                => Assert.False(new CouponService().Validate("NOPE"));
+            [Fact] public void Apply_KnownCode()
+                => Assert.Equal(90m, new CouponService().Apply("SAVE10", 100m));
+            [Fact] public void Checkout_KnownCode_AppliesDiscount()
+                => Assert.Equal(80m, new Checkout(new CouponService()).Charge("BIG20", 100m));
+            [Fact] public void Checkout_UnknownCode_NoDiscount()
+                => Assert.Equal(100m, new Checkout(new CouponService()).Charge("NOPE", 100m));
+            [Fact] public void CartPreview_KnownCode_AppliesDiscount()
+                => Assert.Equal(90m, new CartPreview(new CouponService()).Preview("SAVE10", 100m));
+        }
+    prompt: |
+      Migration task: split `CouponService.Redeem(code, amount)` into:
+        - `bool Validate(string code)` — true if code is a known coupon.
+        - `decimal Apply(string code, decimal amount)` — discounted price.
+          Assumes `Validate(code)` is true; if you want defense in depth,
+          when called with an unknown code, return `amount` unchanged.
+
+      `Redeem` must be REMOVED. Callers (`Checkout.Charge` and
+      `CartPreview.Preview`) should now call `Validate` first; if true
+      call `Apply`, else return the unchanged amount.
+
+      Dispatch an implementer:
+        1. Replace `Redeem` with `Validate` + `Apply`.
+        2. Update both callers.
+        3. All 9 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 720
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 9
+          max_failed: 0
+      - file: CouponService.cs
+        content_matches: 'Validate'
+      - file: CouponService.cs
+        content_matches: 'Apply'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 50
+          leader_iters_max: 28
+
+  # ============================================================
+  # am6 — Remove deprecated unused parameter from a method
+  # ============================================================
+  - id: am6-remove-param
+    taxonomy: *a11_tax
+    description: |
+      A11 — `MetricRecorder.Track(string name, string tag, int value)`
+      has unused `tag` parameter. Remove it; update all 3 callers.
+    workspace: empty-git-repo
+    seed_files:
+      Migration.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Migration</RootNamespace>
+            <AssemblyName>Migration</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      MetricRecorder.cs: |
+        namespace Migration;
+
+        public class MetricRecorder
+        {
+            public List<(string Name, int Value)> Records { get; } = new();
+            // Migration: remove `tag` parameter (unused). Signature becomes (string name, int value).
+            public void Track(string name, string tag, int value) => Records.Add((name, value));
+        }
+      RequestPipeline.cs: |
+        namespace Migration;
+
+        public class RequestPipeline
+        {
+            private readonly MetricRecorder _m;
+            public RequestPipeline(MetricRecorder m) => _m = m;
+            public void OnRequest() => _m.Track("requests", "ignored", 1);
+        }
+      ErrorReporter.cs: |
+        namespace Migration;
+
+        public class ErrorReporter
+        {
+            private readonly MetricRecorder _m;
+            public ErrorReporter(MetricRecorder m) => _m = m;
+            public void OnError() => _m.Track("errors", "discarded", 1);
+        }
+      ThroughputCounter.cs: |
+        namespace Migration;
+
+        public class ThroughputCounter
+        {
+            private readonly MetricRecorder _m;
+            public ThroughputCounter(MetricRecorder m) => _m = m;
+            public void Add(int n) => _m.Track("throughput", "n/a", n);
+        }
+      Migration_Tests.cs: |
+        namespace Migration;
+
+        public class Migration_Tests
+        {
+            [Fact] public void Track_HasTwoParams()
+            {
+                var m = typeof(MetricRecorder).GetMethod("Track",
+                    new[] { typeof(string), typeof(int) });
+                Assert.NotNull(m);
+            }
+            [Fact] public void Track_OldSignature_Gone()
+            {
+                var m = typeof(MetricRecorder).GetMethod("Track",
+                    new[] { typeof(string), typeof(string), typeof(int) });
+                Assert.Null(m);
+            }
+            [Fact] public void RequestPipeline_Tracks()
+            {
+                var m = new MetricRecorder();
+                new RequestPipeline(m).OnRequest();
+                Assert.Equal(("requests", 1), m.Records[0]);
+            }
+            [Fact] public void ErrorReporter_Tracks()
+            {
+                var m = new MetricRecorder();
+                new ErrorReporter(m).OnError();
+                Assert.Equal(("errors", 1), m.Records[0]);
+            }
+            [Fact] public void ThroughputCounter_Tracks()
+            {
+                var m = new MetricRecorder();
+                new ThroughputCounter(m).Add(42);
+                Assert.Equal(("throughput", 42), m.Records[0]);
+            }
+        }
+    prompt: |
+      Migration task: remove the unused `tag` parameter from
+      `MetricRecorder.Track`. Signature becomes
+      `Track(string name, int value)`. Update every caller.
+
+      Dispatch an implementer:
+        1. Change `MetricRecorder.Track` signature + body (drop tag).
+        2. Update every caller to drop the `tag` argument.
+        3. All 5 tests must pass.
+
+      Do not modify the test file. Accept_dispatch.
+    timeout_seconds: 900
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 540
+          min_passed: 5
+          max_failed: 0
+      - file: MetricRecorder.cs
+        content_matches: 'Track\(string name, int value\)'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 26

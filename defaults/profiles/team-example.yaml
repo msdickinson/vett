@@ -1,0 +1,106 @@
+name: team-example
+description: |
+  Example team profile: a leader delegates to an implementer and a
+  reviewer. The leader coordinates, members do the work.
+
+llm:
+  temperature: 0.3
+  top_p: 0.95
+
+system_prompt: You coordinate team members to solve coding problems.
+
+tools:
+  - terminal
+  - file_editor
+
+middleware:
+  - submit_detector
+  - output_truncation
+  - stuck_detector
+  # ⛔ 2026-08-26. The three above are NOT compaction. output_truncation caps a
+  # single tool result, stuck_detector watches for repeat-loops, submit_detector
+  # spots the completion signal — none of them ever removes anything from the
+  # transcript. With no compaction strategy listed, a leader allowed 50
+  # iterations grows its context monotonically until the model refuses. This is
+  # the file people copy when they write their own team profile, so the omission
+  # propagated. Compaction strategies are: llm_summarizing_condenser,
+  # milestone_checkpoint, replan_checkpoint (MiddlewareResolver).
+  - milestone_checkpoint
+  # Trims OLD tool observations (keeps the last 5 intact); defers the
+  # checkpoint rather than replacing it.
+  - observation_elision
+
+# ⛔ DECLARED EXPLICITLY, NOT LEFT TO THE DEFAULT. MiddlewareResolver does
+# `compaction ?? new CompactionConfig()`, so omitting this block does not mean
+# "no opinion" — it silently binds ThresholdTokens = 30000, the value that was
+# hardcoded before the block existed.
+#
+# ⚠ TUNE THIS TO YOUR ENDPOINT. 48000 assumes a 65536-token window (what the
+# other profiles here targeted on deepseek-v4-flash until 2026-08-28; that
+# endpoint now serves 131072, so on the shipped Sparks this example is
+# deliberately conservative rather than matched) and leaves ~17k of headroom
+# for the reply. On a smaller-window model this threshold would never be
+# reached and compaction would never fire; on a much larger one it wastes the
+# window. The number is only meaningful next to the window it was chosen for.
+compaction:
+  threshold_tokens: 48000
+  keep_last_messages: 8
+
+max_iterations: 50
+
+team:
+  leader:
+    name: lead
+    system_prompt: |
+      You are a team leader. You do NOT write code yourself.
+      Delegate to team members using these tools:
+        - assign_task(member, task) — sync, wait for result
+        - assign_async(member, task) — async, get task_id
+        - check_task(task_id) — poll status
+        - wait_task(task_id) — block until done
+        - declare_done(summary) — signal completion
+
+      Available members: implementer, reviewer
+    max_iterations: 30
+
+  members:
+    - name: implementer
+      system_prompt: |
+        You are an implementation specialist. Read the codebase, make
+        changes, and run tests. Return a clear summary of what you did.
+      tools:
+        - terminal
+        - file_editor
+        - think
+      # ⛔ 2026-08-26. A member that declares NO middleware does not inherit the
+      # profile's — it falls back to Builtins.DefaultMiddleware() =
+      # [submit_detector, output_truncation, stuck_detector]
+      # (MiddlewareResolver.ResolveOrDefault:128), which has no compaction. At
+      # max_iterations: 100 this is the longest-running role in the file and the
+      # one most certain to run out of window. The threshold comes from the
+      # profile-level `compaction:` block above via
+      # `m.Compaction ?? profile.Compaction` (Coordinator.cs:347/965/1444).
+      middleware:
+        - submit_detector
+        - output_truncation
+        - stuck_detector
+        - milestone_checkpoint
+        - observation_elision
+      max_iterations: 100
+
+    - name: reviewer
+      system_prompt: |
+        You are a code reviewer. Read the changes and assess them for
+        correctness. Return specific issues if any exist.
+      tools:
+        - terminal
+        - file_editor
+      # Same reason as the implementer above — a member's middleware list is
+      # not inherited, so it has to be named here.
+      middleware:
+        - submit_detector
+        - output_truncation
+        - stuck_detector
+        - milestone_checkpoint
+        - observation_elision
+      max_iterations: 20

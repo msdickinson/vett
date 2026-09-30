@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "monitor",
+    "description": "Read output from a background job started via `bash_background`. Returns a snapshot of the job's stdout + stderr lines plus its current status (running / complete with exit code).\n\n### Cursor pattern\nFirst call: omit `since_line` (or pass 0) to read the full buffer.\nFollow-up: pass the previous response's `total_lines` as `since_line` to get only what's new — same pattern as `tail -f` against a log.\n\n### Status\n- `complete: false` — process is still running. Re-call to get more output.\n- `complete: true, exit_code: 0` — finished successfully.\n- `complete: true, exit_code: !=0` — finished with an error code; the buffer holds whatever it printed.\n",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "description": "The job id returned by `bash_background`."
+        },
+        "since_line": {
+          "type": "integer",
+          "description": "Zero-based line index. Omit / pass 0 to read every line; pass the previous call's `total_lines` to read only new lines. Out-of-range values are clamped."
+        }
+      },
+      "required": ["job_id"]
+    }
+  }
+}

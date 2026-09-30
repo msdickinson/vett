@@ -1,0 +1,11 @@
+{
+  "type": "function",
+  "function": {
+    "name": "bash_jobs",
+    "description": "List every background job started in this chat session, with status (running / complete + exit code), uptime, and total output line count. Use this when you've forgotten a job id or want to see what's still running before deciding whether to start more work.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+}

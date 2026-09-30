@@ -1,0 +1,8 @@
+/bin/
+/results/
+*.test
+*.out
+coverage.*
+.vscode/
+.idea/
+*.log

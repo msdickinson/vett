@@ -1,0 +1,16 @@
+name: swe-rebench-easy-py
+description: |
+  SWE-Rebench v2 — Python easy-tier instances (diff=easy, language=python).
+  926 total easy instances; 802 are Python. Intended for Phase 1 baseline runs.
+  Docker images: docker.io/swerebenchv2/<repo>:<id>-<sha>
+
+manifest: ~/.cache/vett/datasets/swe-rebench-v2.jsonl
+
+filter:
+  language: python
+  difficulty: easy
+
+agent_profile: openhands
+# SWE-Rebench v2 images clone the repo at /<repo-basename> (the image's own
+# WorkingDir), NOT /testbed. {repo_name} expands per-instance from the manifest.
+working_dir: /{repo_name}

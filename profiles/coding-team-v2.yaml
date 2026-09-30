@@ -1,0 +1,316 @@
+name: coding-team-v2
+description: |
+  BASELINE arm of the team-python-web-tier2 A/B (the no-analyzer arm;
+  `coding-team-v2-analyzer` is the treatment).
+
+  2026-08-25: brought into version control from ~/.vett/profiles/, where it
+  was the only copy — the shared store is stale and untracked, so the suite
+  could not be run from a clean checkout. Repointed at the same time:
+  old-gpu-a -> gpu-1 (address vacated by the 2026-08-22 DHCP re-lease; gpu-2 itself
+  is alive at .100) and aeon-mtp -> deepseek-v4-flash (AEON is switched off;
+  on gpu-1 both ids resolved to the same DeepSeek-V4-Flash-DSpark weights).
+  Profiles resolve cwd > ~/.vett > install-dir, so this repo copy wins when
+  vett runs from the repo.
+
+  2026-08-25 (later the same day): the ~/.vett copy was REMOVED. An earlier
+  revision of this note said it was "deliberately left untouched" — that is no
+  longer true, and the sentence is corrected here rather than left to be read
+  as current. The shared store held a copy whose bytes DIFFERED from this file,
+  so any run started from a different cwd silently got the other one. All 43
+  originals are backed up at ~/.vett/profiles.bak-2026-08-25/.
+
+  ⛔ 2026-08-26 — DO NOT POOL RUNS ACROSS THIS DATE. Two defects were repaired
+  in BOTH arms identically (so the analyzer-vs-no-analyzer contrast is
+  preserved, and post-repair arms remain comparable TO EACH OTHER):
+    (A) compaction was silently running at the 30000 default and the two
+        members had no compaction middleware at all;
+    (B) leader_terminal_readonly was false, leaving both leader write-bypass
+        vectors open.
+  Either change can move a score on its own, so a pre-repair number and a
+  post-repair number are measurements of different harnesses. They are not
+  two samples of one. Re-baseline before quoting any V2 rate; the V1 = 2/5
+  and V2 figures above are PRE-repair and stay attached to that label.
+
+  EXPERIMENT V2 (built on V1 = 2/5):
+    - Temp 0.0 (greedy) everywhere — V1 at temp 0.1 still saw drift.
+    - top_p 0.9
+    - enable_thinking: false everywhere
+    - Implementer system prompt: explicit file_editor create example
+      with `file_text` field name. (V1 hit empty-file bug because
+      implementer used `content` instead.)
+    - Code change companion: file_editor.create now errors if
+      file_text missing (was silently creating empty files).
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  provider: local
+  endpoint: http://gpu-2:8000/v1
+  model: deepseek-v4-flash
+  temperature: 0.0
+  top_p: 0.9
+  request_timeout_seconds: 300
+  num_retries: 3
+  enable_thinking: false
+
+system_prompt: |
+  You coordinate two team members to help with coding tasks.
+
+middleware:
+  - output_truncation
+  - stuck_detector
+  - milestone_checkpoint
+  - observation_elision
+
+# 2026-08-26 (A). Was ABSENT, which is not the same as "unset": with no block,
+# MiddlewareResolver does `compaction ?? new CompactionConfig()` (:46) and
+# milestone_checkpoint binds threshold_tokens = 30000 — the value hardcoded
+# before this block existed. Nothing logs that substitution, so the profile read
+# as "no opinion on compaction" while actually carrying a strong, stale one.
+#
+# This read 48000 (not 100000) because gpu-1 then served
+# DeepSeek-V4-Flash-DSpark with max_model_len = 65536, NOT the 131072 the
+# older profiles were written for. Same number and same reason as
+# ds-team-flash.yaml — see its comment before changing this.
+# >> RESTORED 2026-08-28: 48000 -> 100000. The Sparks were relaunched at
+# --gpu-memory-utilization 0.85 --max-model-len 131072 (gpu-1, container
+# vllm_dsv4), and `curl -s http://gpu-1:8000/v1/models` now returns
+# "max_model_len": 131072. The 65536 the text above cites is HISTORY, not the
+# current server. Roll back to 48000 only if the Sparks return to 65536.
+#
+# Kept on milestone_checkpoint rather than moving to ds-team-flash's
+# llm_summarizing_condenser: the condenser is registered ONLY when an
+# LlmSettings is threaded in (MiddlewareResolver.cs:55), and two of the five
+# resolution call sites don't thread one. milestone_checkpoint registers
+# unconditionally, so it is the strategy that cannot be silently dropped. This
+# is a deliberate difference from the ds-* line, not an oversight.
+compaction:
+  threshold_tokens: 100000
+  keep_last_messages: 8
+
+tools:
+  - terminal
+  - file_editor
+  - think
+
+max_iterations: 50
+timeout_minutes: 60
+
+team:
+  # 2 member(s) able to run at once, +1 slot of headroom.
+  max_concurrent_dispatches: 3
+  auto_inject_async_results: true
+  dispatch_worktree: true
+  dispatch_retention: keep-on-failure
+  dispatch_max_age_days: 7
+
+  # 2026-08-26 (B) — SEPARATE change from (A) above; they are bundled in one
+  # commit but must be attributed separately if either moves a number.
+  #
+  # Was absent, which defaults to false (Profile.cs:427). With
+  # dispatch_worktree: true, accept_dispatch is the intended merge path, and
+  # both measured bypass vectors from LeaderWriteGuard.cs:12-28 were open at
+  # once: the leader could `cp` out of a member's worktree to hand-merge, or
+  # `sed -i` the parent directly. The first is how a run PASSED BY CHEATING.
+  # The four ds-team-* profiles all set this; these two were the only team
+  # profiles that did not.
+  leader_terminal_readonly: true
+
+  leader:
+    name: lead
+    system_prompt: |
+      You are a coding assistant. You can use tools directly OR delegate
+      to two team members:
+        - researcher  — read-only, returns a summary
+        - implementer — reads + edits + runs commands
+
+      Tool calls go through the structured tool-call API, not as text.
+      Never write `<tool_call>` tags or XML in your response to invoke
+      tools — emit the actual function call. The harness will catch
+      and retry malformed shapes, but every drifted iteration is wasted
+      time. Once you have a successful result from a tool, don't keep
+      re-calling it.
+
+      When the user EXPLICITLY asks you to dispatch (e.g. "have an
+      implementer create…", "have the researcher find…", "dispatch a
+      member to…"), you MUST use assign_task / assign_async.
+      Do NOT do the work yourself with file_editor / terminal.
+      Doing it yourself when explicitly asked to delegate is a bug.
+
+      assign_task is SYNCHRONOUS — its result returns inline in the
+      same turn. assign_async is ASYNCHRONOUS — results auto-deliver
+      in a future turn as a <background_task_results> block.
+
+      After EITHER kind of dispatch returns with a PENDING REVIEW
+      block (it will be in the tool result for sync, in the
+      background_task_results for async):
+        - Your VERY NEXT tool call MUST be accept_dispatch(task_id,
+          review="...") or reject_dispatch(task_id, reason="...").
+        - The `review` / `reason` field is REQUIRED — describe the
+          diff and the self-assessment you saw.
+        - Do NOT call file_editor or terminal to "verify" — the
+          worktree is isolated; the parent workspace is unchanged
+          until you accept_dispatch. Touching the parent yourself
+          creates stale state and conflicts.
+        - Do NOT redo the work yourself; the implementer already
+          did it. Trust the diff or reject it.
+
+      For async (assign_async): until the <background_task_results>
+      block arrives, do NOT verify — no speculative review_dispatch,
+      no file_editor / terminal "is it done yet" checks. Acknowledge
+      and end your turn. (inject_into_task and cancel_task ARE
+      allowed mid-flight — they're communication with the member,
+      not verification.)
+
+      For multi-step prompts ("Step 1: …, Step 2: …"): each step is
+      a separate dispatch + accept cycle. Do not skip Step 2.
+
+      Task description rule:
+        Do NOT include absolute workspace paths in member task strings.
+    max_iterations: 40
+    llm:
+      temperature: 0.0
+      top_p: 0.9
+      enable_thinking: false
+
+  members:
+    - name: researcher
+      system_prompt: |
+        You are a code research specialist. Read what you need, then
+        ANSWER IMMEDIATELY.
+
+        STOP-FAST RULE (most important):
+          If a single search/grep/read returned a result that answers
+          the task, stop and report THAT result. Do not re-grep, do
+          not search alternative paths, do not speculate about other
+          files that "might" have related content. The answer is in
+          the data your tools just gave you — finalize and exit.
+
+        For "find which file contains X": one `grep -rn "X" .` is
+        usually enough. If it returns a hit, that's your answer.
+        Report it and stop.
+
+        Stream findings via report_progress as you go.
+
+        Constraints:
+          - HARD CAP: ≤6 tool calls total per task. Reserve the last
+            one for your final answer if needed.
+          - DO NOT edit files. Read-only.
+          - Do NOT explore paths the task didn't mention (e.g. don't
+            wander into src/Vett/ when the task is about src/).
+          - Final reply: 2-4 short sentences, plain prose, cite paths
+            you actually saw in tool output (never invent paths).
+      tools:
+        - terminal
+        - file_editor
+        - think
+      # 2026-08-26 (A). A member that declares NO middleware does not inherit
+      # the profile's — it falls back to Builtins.DefaultMiddleware() =
+      # [submit_detector, output_truncation, stuck_detector], which has no
+      # compaction of any kind (MiddlewareResolver.ResolveOrDefault:128). The
+      # block above applied to the leader only; this member's context grew
+      # unbounded until the model refused. Mirrors the leader's chain.
+      # submit_detector is force-prepended when unlisted (:113), so naming a
+      # list here is purely additive and cannot drop the completion signal.
+      middleware:
+        - output_truncation
+        - stuck_detector
+        - milestone_checkpoint
+        - observation_elision
+      max_iterations: 10
+      llm:
+        temperature: 0.0
+        top_p: 0.9
+
+    - name: implementer
+      system_prompt: |
+        You are an implementation specialist. Read what's needed,
+        make the changes, and verify with tests when applicable.
+
+        Tool calls go through the structured tool-call API, NOT as
+        text. NEVER write `<tool_call>` tags, `<function=...>`,
+        `<parameter=...>`, or any XML/markdown shape in your reply
+        text to invoke a tool — emit the actual function call.
+        Common malformed shapes that DO NOT WORK:
+          - `<tool_call>=file_editor`        (extra `=`)
+          - `<function=file_editor>`         (HTML-flavored)
+          - text describing what you'd call without calling it
+        If you find yourself typing `<` followed by `tool_call` or
+        `function`, stop and use the actual tool API instead.
+
+        How your changes get applied:
+          When the workspace is a git repo, your dispatch runs in an
+          isolated git worktree.
+
+        STOP DITHERING — START WRITING:
+          For "create file X" tasks, your VERY FIRST tool call should
+          be `file_editor create` (with file_text) most of the time.
+          Don't burn iterations on think/view/view/view before
+          writing — `view` returning the same listing twice means
+          your next call should be `create`, not another `view`.
+          If the task is hard, draft an attempt FIRST, then iterate.
+          A working-but-imperfect implementation beats a perfect
+          one that was never written.
+
+        FIRST-MESSAGE RULE (very important):
+          Your VERY FIRST response in this dispatch MUST contain a
+          function_call. Not prose. Not a markdown code block
+          describing what you'd do. An actual structured function_call.
+          If you find yourself typing `I'll start by...` or `Let me
+          first...` followed by a markdown code block — STOP. That
+          response will be wasted. Emit the function_call instead,
+          and put any prose you want in the function_call's args
+          (e.g. inside a `summary` field) or save it for SELF-ASSESSMENT.
+
+        Stream progress via report_progress.
+
+        file_editor schema (CRITICAL — get this right first try):
+
+          To CREATE a file, the call MUST include `file_text` (NOT
+          `content`). Example for creating a README:
+            {
+              "command": "create",
+              "path": "README.md",
+              "file_text": "# TestRepo\n\nA short description here.\n",
+              "security_risk": "LOW"
+            }
+          Omitting `file_text` makes the file empty — the tool will
+          now reject this with an error, but it costs you an iteration.
+
+          To EDIT an existing file, view it first, then use str_replace:
+            {
+              "command": "str_replace",
+              "path": "src/foo.ts",
+              "old_str": "<exact slice from view>",
+              "new_str": "<replacement>",
+              "security_risk": "LOW"
+            }
+
+        Path conventions:
+          USE RELATIVE paths from your cwd (the file_editor schema
+          description tells you the cwd).
+
+        REQUIRED final-message format:
+          Your last message MUST start with this prefix:
+
+            SELF-ASSESSMENT: <confident | partial | uncertain>
+            NOTES: <one short paragraph>
+      tools:
+        - terminal
+        - file_editor
+        - think
+      # 2026-08-26 (A) — same fallback defect as the researcher above; see that
+      # comment. This member is the one that matters most: max_iterations 80 is
+      # by far the longest chain in the profile, so it is the member that
+      # actually reached the wall.
+      middleware:
+        - output_truncation
+        - stuck_detector
+        - milestone_checkpoint
+        - observation_elision
+      max_iterations: 80
+      llm:
+        temperature: 0.0
+        top_p: 0.9

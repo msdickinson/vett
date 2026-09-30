@@ -1,0 +1,563 @@
+name: team-method-tier1-direct
+description: |
+  A2 Implement-Method variant — same instances as team-method-tier1 but
+  the prompt asks the leader to do the work DIRECTLY with file_editor
+  rather than dispatching an implementer. Pure model-capability
+  measurement; isolates the dispatch worktree mechanism.
+
+  Observed 2026-05-14: dispatch-based team-method-tier1 = 42/50 = 84%
+  with 6/8 fails being implementer worktree drift after terminal_timeout,
+  not real model errors. This variant removes that confound.
+
+  Verification is `dotnet test` — pure deterministic.
+
+  Run: vett team-bench team-method-tier1-direct
+
+profile: ds-team-flash
+tier: 1
+
+instances:
+  - id: m1-is-palindrome
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implement IsPalindrome(string) -> bool. ~30 cases.
+    workspace: empty-git-repo
+    seed_files:
+      Methods.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MethodBench</RootNamespace>
+            <AssemblyName>MethodBench</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup>
+            <Using Include="Xunit" />
+          </ItemGroup>
+        </Project>
+      M1_Tests.cs: |
+        namespace MethodBench;
+
+        public class M1_IsPalindrome_Tests
+        {
+            // Case-insensitive, ignores any character that isn't a letter
+            // or digit. Empty and single-char strings are palindromes.
+            [Theory]
+            [InlineData("", true)]
+            [InlineData("a", true)]
+            [InlineData("Z", true)]
+            [InlineData("aa", true)]
+            [InlineData("ab", false)]
+            [InlineData("aba", true)]
+            [InlineData("abc", false)]
+            [InlineData("racecar", true)]
+            [InlineData("Racecar", true)]
+            [InlineData("RaceCar", true)]
+            [InlineData("hello", false)]
+            [InlineData("hello world", false)]
+            [InlineData("noon", true)]
+            [InlineData("Noon", true)]
+            [InlineData("12321", true)]
+            [InlineData("12345", false)]
+            [InlineData("A man a plan a canal Panama", true)]
+            [InlineData("No 'x' in Nixon", true)]
+            [InlineData("Was it a car or a cat I saw?", true)]
+            [InlineData("Madam, I'm Adam.", true)]
+            [InlineData("Not a palindrome", false)]
+            [InlineData(" ", true)]
+            [InlineData("  ", true)]
+            [InlineData("!@#$%", true)]
+            [InlineData("a!b!a", true)]
+            [InlineData("a!b!c", false)]
+            [InlineData("12 21", true)]
+            [InlineData("10 01", true)]
+            [InlineData("Able was I ere I saw Elba", true)]
+            [InlineData("almost a palindrome but not", false)]
+            public void Cases(string input, bool expected)
+                => Assert.Equal(expected, Methods.IsPalindrome(input));
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single static method, single file.
+
+      Create `Methods.cs` in the workspace root containing a public
+      static class `Methods` in the `MethodBench` namespace, with a
+      single method:
+
+          public static bool IsPalindrome(string s)
+
+      Behavior:
+        - empty / single-char strings return true
+        - case-insensitive
+        - ignore any character that isn't a letter or digit (so
+          "A man a plan a canal Panama" returns true)
+        - otherwise: does it read the same forwards and backwards?
+
+      DO NOT run `dotnet test` yourself — just create Methods.cs and
+      report done; the bench harness verifies. The seeded `M1_Tests.cs`
+      contains the xUnit cases and the harness runs them after you
+      finish.
+    timeout_seconds: 240
+    assertions:
+      - file: Methods.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 28
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 16
+
+  - id: m2-roman-to-int
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implement RomanToInt(string) -> int. Throws on invalid. ~25 cases.
+    workspace: empty-git-repo
+    seed_files:
+      Methods.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MethodBench</RootNamespace>
+            <AssemblyName>MethodBench</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      M2_Tests.cs: |
+        namespace MethodBench;
+
+        public class M2_RomanToInt_Tests
+        {
+            [Theory]
+            [InlineData("I", 1)]
+            [InlineData("II", 2)]
+            [InlineData("III", 3)]
+            [InlineData("IV", 4)]
+            [InlineData("V", 5)]
+            [InlineData("VI", 6)]
+            [InlineData("IX", 9)]
+            [InlineData("X", 10)]
+            [InlineData("XL", 40)]
+            [InlineData("L", 50)]
+            [InlineData("XC", 90)]
+            [InlineData("C", 100)]
+            [InlineData("CD", 400)]
+            [InlineData("D", 500)]
+            [InlineData("CM", 900)]
+            [InlineData("M", 1000)]
+            [InlineData("LVIII", 58)]
+            [InlineData("MCMXCIV", 1994)]
+            [InlineData("MMXXIV", 2024)]
+            [InlineData("MMMCMXCIX", 3999)]
+            public void Valid(string s, int expected)
+                => Assert.Equal(expected, Methods.RomanToInt(s));
+
+            [Theory]
+            [InlineData("")]
+            [InlineData("ABC")]
+            [InlineData("123")]
+            [InlineData("iv")]
+            [InlineData("X X")]
+            public void Invalid_Throws(string s)
+                => Assert.ThrowsAny<Exception>(() => Methods.RomanToInt(s));
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single static method, single file.
+
+      Create `Methods.cs` in the workspace root containing a public
+      static class `Methods` in the `MethodBench` namespace with:
+
+          public static int RomanToInt(string s)
+
+      Behavior:
+        - converts a valid roman numeral string ("I","II","IV","V",
+          "IX","X","XL","L","XC","C","CD","D","CM","M") to its int
+          value; e.g. "MCMXCIV" -> 1994
+        - throws an exception (any kind, but ArgumentException is
+          conventional) on invalid input: empty string, lowercase
+          letters, non-roman characters, whitespace inside the string
+
+      DO NOT run `dotnet test` yourself — just create Methods.cs and report done; the bench harness verifies. The seeded `M2_Tests.cs` contains both Valid and Invalid_Throws
+      Theory cases. Run `dotnet test`; all 25 cases must pass.
+    timeout_seconds: 300
+    assertions:
+      - file: Methods.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 25
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 16
+
+  - id: m3-word-count
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implement WordCount(string) -> Dictionary<string,int>. ~15 cases.
+    workspace: empty-git-repo
+    seed_files:
+      Methods.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MethodBench</RootNamespace>
+            <AssemblyName>MethodBench</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      M3_Tests.cs: |
+        using System.Text.Json;
+
+        namespace MethodBench;
+
+        public class M3_WordCount_Tests
+        {
+            // Pairs of (input, expected-as-JSON). JSON keeps ordering
+            // out of the picture and makes InlineData ergonomic.
+            [Theory]
+            [InlineData("", "{}")]
+            [InlineData("hello", "{\"hello\":1}")]
+            [InlineData("Hello", "{\"hello\":1}")]
+            [InlineData("HELLO", "{\"hello\":1}")]
+            [InlineData("hello hello", "{\"hello\":2}")]
+            [InlineData("a a a a", "{\"a\":4}")]
+            [InlineData("the cat sat", "{\"the\":1,\"cat\":1,\"sat\":1}")]
+            [InlineData("The cat sat the the", "{\"the\":3,\"cat\":1,\"sat\":1}")]
+            [InlineData("hello, world!", "{\"hello\":1,\"world\":1}")]
+            [InlineData("hi! hi? hi.", "{\"hi\":3}")]
+            [InlineData("one\ntwo\nthree", "{\"one\":1,\"two\":1,\"three\":1}")]
+            [InlineData("   spaced   out   ", "{\"spaced\":1,\"out\":1}")]
+            [InlineData("don't can't", "{\"dont\":1,\"cant\":1}")]
+            [InlineData("foo-bar foo-bar", "{\"foobar\":2}")]
+            [InlineData("123 abc 123", "{\"123\":2,\"abc\":1}")]
+            public void Cases(string input, string expectedJson)
+            {
+                var expected = JsonSerializer.Deserialize<Dictionary<string,int>>(expectedJson)!;
+                var actual = Methods.WordCount(input);
+                Assert.Equal(expected.Count, actual.Count);
+                foreach (var (k, v) in expected) Assert.Equal(v, actual[k]);
+            }
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single static method, single file.
+
+      Create `Methods.cs` in the workspace root containing a public
+      static class `Methods` in the `MethodBench` namespace with:
+
+          public static Dictionary<string,int> WordCount(string text)
+
+      Behavior (ORDER OF OPERATIONS IS CRITICAL):
+        1. SPLIT the input on whitespace into tokens FIRST. Whitespace is
+           the boundary — do NOT collapse spaces away yet. So
+           "hi! hi? hi." becomes ["hi!", "hi?", "hi."] (three tokens).
+        2. For each token, lowercase it and remove any character that's
+           not a letter or digit — but only WITHIN the token. So
+           "hi!" -> "hi", "foo-bar" -> "foobar", "don't" -> "dont".
+        3. Drop tokens that became empty after step 2.
+        4. Count distinct cleaned tokens. Return a Dictionary.
+
+      Empty input -> empty dictionary.
+
+      Sanity check: WordCount("hi! hi? hi.") MUST return {"hi": 3},
+      NOT {"hihihi": 1}. Splitting on whitespace BEFORE stripping
+      punctuation is what makes this work.
+
+      Another sanity check: WordCount("12 21") MUST return
+      {"12": 1, "21": 1}, NOT {"1221": 1}.
+
+      DO NOT run `dotnet test` yourself — just create Methods.cs and
+      report done; the bench harness verifies. Seeded `M3_Tests.cs`
+      covers the cases; all 15 must pass.
+    timeout_seconds: 300
+    assertions:
+      - file: Methods.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 15
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 16
+
+  - id: m4-merge-intervals
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implement MergeIntervals(List<(int,int)>) -> List<(int,int)>. ~12 cases.
+    workspace: empty-git-repo
+    seed_files:
+      Methods.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MethodBench</RootNamespace>
+            <AssemblyName>MethodBench</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      M4_Tests.cs: |
+        namespace MethodBench;
+
+        public class M4_MergeIntervals_Tests
+        {
+            // Inputs/outputs as flat int arrays (start1,end1,start2,end2,...);
+            // unflatten inside the test. xUnit InlineData supports int[] this way.
+            [Theory]
+            [InlineData(new int[]{}, new int[]{})]
+            [InlineData(new int[]{1,3}, new int[]{1,3})]
+            [InlineData(new int[]{1,3, 2,6}, new int[]{1,6})]
+            [InlineData(new int[]{1,3, 2,6, 8,10}, new int[]{1,6, 8,10})]
+            [InlineData(new int[]{1,4, 4,5}, new int[]{1,5})]
+            [InlineData(new int[]{1,4, 5,6}, new int[]{1,4, 5,6})]
+            [InlineData(new int[]{8,10, 1,3, 2,6}, new int[]{1,6, 8,10})]
+            [InlineData(new int[]{1,10, 2,3, 4,5}, new int[]{1,10})]
+            [InlineData(new int[]{1,2, 3,4, 5,6}, new int[]{1,2, 3,4, 5,6})]
+            [InlineData(new int[]{1,4, 0,4}, new int[]{0,4})]
+            [InlineData(new int[]{1,4, 0,2, 3,5}, new int[]{0,5})]
+            [InlineData(new int[]{1,1}, new int[]{1,1})]
+            public void Cases(int[] flatIn, int[] flatExpected)
+            {
+                var input = new List<(int,int)>();
+                for (int i = 0; i < flatIn.Length; i += 2)
+                    input.Add((flatIn[i], flatIn[i+1]));
+                var expected = new List<(int,int)>();
+                for (int i = 0; i < flatExpected.Length; i += 2)
+                    expected.Add((flatExpected[i], flatExpected[i+1]));
+                var actual = Methods.MergeIntervals(input);
+                Assert.Equal(expected, actual);
+            }
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single static method, single file.
+
+      Create `Methods.cs` in the workspace root containing a public
+      static class `Methods` in the `MethodBench` namespace with:
+
+          public static List<(int,int)> MergeIntervals(List<(int,int)> intervals)
+
+      Behavior:
+        - merge overlapping or touching intervals (e.g. [1,4] and [4,5]
+          merge to [1,5])
+        - return the merged list sorted by start ascending
+        - empty input returns an empty list
+        - intervals are inclusive endpoints; treat ends-touching
+          (a.end == b.start) as overlapping
+        - assume start <= end in every input interval
+
+      DO NOT run `dotnet test` yourself — just create Methods.cs and report done; the bench harness verifies. Seeded `M4_Tests.cs` has 12 cases;
+      all must pass.
+    timeout_seconds: 300
+    assertions:
+      - file: Methods.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 12
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 16
+
+  - id: m5-eval-expr
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implement EvalExpr(string) -> double — basic arithmetic with parens. ~25 cases.
+    workspace: empty-git-repo
+    seed_files:
+      Methods.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>MethodBench</RootNamespace>
+            <AssemblyName>MethodBench</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      M5_Tests.cs: |
+        namespace MethodBench;
+
+        public class M5_EvalExpr_Tests
+        {
+            [Theory]
+            [InlineData("0", 0)]
+            [InlineData("1", 1)]
+            [InlineData("42", 42)]
+            [InlineData("1+1", 2)]
+            [InlineData("2-1", 1)]
+            [InlineData("2*3", 6)]
+            [InlineData("6/2", 3)]
+            [InlineData("2+3*4", 14)]
+            [InlineData("(2+3)*4", 20)]
+            [InlineData("2*(3+4)", 14)]
+            [InlineData("(1+2)*(3+4)", 21)]
+            [InlineData("-5", -5)]
+            [InlineData("-5+3", -2)]
+            [InlineData("3+-5", -2)]
+            [InlineData("(-5+3)", -2)]
+            [InlineData("10/4", 2.5)]
+            [InlineData("1+2+3+4", 10)]
+            [InlineData("100-50-25", 25)]
+            [InlineData("2*3*4", 24)]
+            [InlineData(" 1 + 2 ", 3)]
+            [InlineData("((1+2))", 3)]
+            public void Valid(string expr, double expected)
+                => Assert.Equal(expected, Methods.EvalExpr(expr), 6);
+
+            [Theory]
+            [InlineData("(1+2")]
+            [InlineData("1+2)")]
+            [InlineData("1++1")]
+            [InlineData("")]
+            [InlineData("abc")]
+            public void Invalid_Throws(string expr)
+                => Assert.ThrowsAny<Exception>(() => Methods.EvalExpr(expr));
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single static method, single file.
+
+      Create `Methods.cs` in the workspace root containing a public
+      static class `Methods` in the `MethodBench` namespace with:
+
+          public static double EvalExpr(string expr)
+
+      Behavior:
+        - evaluates an arithmetic expression supporting:
+          - integer and decimal literals
+          - binary operators: + - * /
+          - unary minus (e.g. "-5", "3+-5")
+          - parentheses for grouping
+          - whitespace anywhere is ignored
+        - usual precedence: */ before +-, parens override
+        - UNARY rule (precise): only `-` can be unary (e.g. "-5",
+          "3+-5"). Unary `+` is NOT allowed — "1++1" must THROW
+          because the second `+` would have to be unary `+`, which
+          isn't supported.
+        - throws an exception on invalid input: empty string,
+          mismatched parens, two `+` or two `*` etc. in a row,
+          letters, trailing operator, etc.
+
+      Pick any algorithm — recursive descent, shunting-yard, etc.
+
+      C# accessibility caveat (this has burned previous attempts):
+        If you put parsing logic in a HELPER CLASS or NESTED CLASS,
+        every method on it that the outer `Methods` class calls
+        must be marked `public` (or `internal`). C# defaults class
+        members to `private`, which causes CS0122 "inaccessible due
+        to its protection level" errors at compile time.
+        Simplest path: keep all logic as static methods on the
+        `Methods` class itself — no helper class — so accessibility
+        doesn't bite you.
+
+      DO NOT run `dotnet test` yourself — just create Methods.cs and report done; the bench harness verifies. Seeded `M5_Tests.cs` has 21 valid + 5 invalid cases. The harness will run
+      `dotnet test`; all must pass.
+    timeout_seconds: 540
+    assertions:
+      - file: Methods.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 25
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16

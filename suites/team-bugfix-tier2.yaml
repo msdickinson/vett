@@ -1,0 +1,449 @@
+name: team-bugfix-tier2
+description: |
+  Tier 2: localize-and-fix workload. Each instance ships an
+  existing, FULLY-IMPLEMENTED .NET project with a real bug. The
+  test suite contains both passing tests (existing correct
+  behavior — must stay green) and failing tests (which expose the
+  bug). The agent must read the code, locate the bug, fix it, and
+  ensure ALL tests pass without changing test code.
+
+  This is the closest the bench gets to a real TicketForge bug
+  ticket: existing code, broken behavior, failing test as the
+  ground truth.
+
+  Run: vett team-bench team-bugfix-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: b1-off-by-one-pagination
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Pagination.PageOf<T> has an off-by-one bug — it computes
+      `Skip(page * size)` when callers pass 1-based page numbers,
+      so page=1 returns items 1..size instead of 0..size-1. Two
+      tests fail; three tests pass. Fix the skip calc without
+      changing the method signature.
+    workspace: empty-git-repo
+    seed_files:
+      Lib.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Lib</RootNamespace>
+            <AssemblyName>Lib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Pagination.cs: |
+        using System.Collections.Generic;
+        using System.Linq;
+
+        namespace Lib;
+
+        public static class Pagination
+        {
+            /// <summary>
+            /// Returns the items on the given 1-based page.
+            /// page=1 returns the first `size` items; page=2 returns
+            /// the next `size`; and so on.
+            /// </summary>
+            public static IReadOnlyList<T> PageOf<T>(IEnumerable<T> source, int page, int size)
+            {
+                if (page < 1) throw new System.ArgumentOutOfRangeException(nameof(page));
+                if (size < 1) throw new System.ArgumentOutOfRangeException(nameof(size));
+                return source.Skip(page * size).Take(size).ToList();
+            }
+
+            public static int PageCount<T>(IReadOnlyCollection<T> source, int size)
+            {
+                if (size < 1) throw new System.ArgumentOutOfRangeException(nameof(size));
+                if (source.Count == 0) return 0;
+                return (source.Count + size - 1) / size;
+            }
+        }
+      Pagination_Tests.cs: |
+        using System.Linq;
+        namespace Lib;
+
+        public class Pagination_Tests
+        {
+            // --- Page boundaries (currently failing — the bug) -----------
+            [Fact]
+            public void PageOf_Page1_ReturnsFirstChunk()
+            {
+                var src = Enumerable.Range(1, 10).ToList();
+                var page = Pagination.PageOf(src, page: 1, size: 3);
+                Assert.Equal(new[] {1, 2, 3}, page);
+            }
+
+            [Fact]
+            public void PageOf_Page2_ReturnsSecondChunk()
+            {
+                var src = Enumerable.Range(1, 10).ToList();
+                var page = Pagination.PageOf(src, page: 2, size: 3);
+                Assert.Equal(new[] {4, 5, 6}, page);
+            }
+
+            // --- Existing passing tests (must stay green) ----------------
+            [Fact]
+            public void PageOf_PageBeyondEnd_ReturnsEmpty()
+            {
+                var src = Enumerable.Range(1, 5).ToList();
+                var page = Pagination.PageOf(src, page: 4, size: 3);
+                Assert.Empty(page);
+            }
+
+            [Fact]
+            public void PageOf_InvalidPage_Throws()
+            {
+                var src = new[] {1, 2, 3};
+                Assert.ThrowsAny<System.Exception>(() => Pagination.PageOf(src, page: 0, size: 2));
+            }
+
+            [Fact]
+            public void PageOf_InvalidSize_Throws()
+            {
+                var src = new[] {1, 2, 3};
+                Assert.ThrowsAny<System.Exception>(() => Pagination.PageOf(src, page: 1, size: 0));
+            }
+
+            [Fact]
+            public void PageCount_RoundsUp()
+            {
+                Assert.Equal(4, Pagination.PageCount(new[] {1,2,3,4,5,6,7,8,9,10}, 3));
+                Assert.Equal(0, Pagination.PageCount(System.Array.Empty<int>(), 3));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has a `Pagination.cs` library and
+      `Pagination_Tests.cs`. Two tests in the file are failing
+      (PageOf_Page1_ReturnsFirstChunk and PageOf_Page2_ReturnsSecondChunk).
+      Read the code, find the off-by-one bug in `PageOf<T>`, and
+      fix it.
+
+      The bug: the method comment says "page=1 returns the first
+      `size` items" but `Skip(page * size)` skips the first page's
+      items entirely when page=1. The fix is `Skip((page - 1) * size)`.
+
+      Constraints:
+        - DO NOT change the method signature.
+        - DO NOT modify the test file.
+        - The 4 currently-passing tests must stay green.
+
+      DO NOT run `dotnet test` yourself — just edit Pagination.cs
+      and report done; the bench harness verifies. All 6 tests must
+      pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Pagination.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 6
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 18
+
+  - id: b2-missing-currency-validation
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Money.Add returns a new Money but doesn't validate that the
+      other operand's currency matches — it silently adds amounts
+      regardless of currency. The test expects an exception on
+      currency mismatch. Fix Add (and the matching Subtract) to
+      throw on currency mismatch.
+    workspace: empty-git-repo
+    seed_files:
+      Money.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Lib</RootNamespace>
+            <AssemblyName>Lib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Money.cs: |
+        namespace Lib;
+
+        public sealed class Money
+        {
+            public decimal Amount   { get; }
+            public string  Currency { get; }
+
+            public Money(decimal amount, string currency)
+            {
+                Amount   = amount;
+                Currency = currency;
+            }
+
+            // BUG: silently ignores currency mismatch.
+            public Money Add(Money other)
+            {
+                return new Money(Amount + other.Amount, Currency);
+            }
+
+            // BUG: same problem.
+            public Money Subtract(Money other)
+            {
+                return new Money(Amount - other.Amount, Currency);
+            }
+
+            public override bool Equals(object? obj) =>
+                obj is Money m && m.Amount == Amount && m.Currency == Currency;
+            public override int GetHashCode() => System.HashCode.Combine(Amount, Currency);
+        }
+      Money_Tests.cs: |
+        namespace Lib;
+
+        public class Money_Tests
+        {
+            // --- Existing passing tests (must stay green) ----------------
+            [Fact]
+            public void Add_SameCurrency_Sums()
+            {
+                var sum = new Money(10m, "USD").Add(new Money(5m, "USD"));
+                Assert.Equal(new Money(15m, "USD"), sum);
+            }
+
+            [Fact]
+            public void Subtract_SameCurrency_Subtracts()
+            {
+                var d = new Money(10m, "USD").Subtract(new Money(3m, "USD"));
+                Assert.Equal(new Money(7m, "USD"), d);
+            }
+
+            [Fact]
+            public void Equals_ByValue()
+            {
+                Assert.Equal(new Money(10m, "USD"), new Money(10m, "USD"));
+                Assert.NotEqual(new Money(10m, "USD"), new Money(10m, "EUR"));
+            }
+
+            // --- Failing tests exposing the bug --------------------------
+            [Fact]
+            public void Add_DifferentCurrency_Throws()
+            {
+                Assert.ThrowsAny<System.Exception>(() =>
+                    new Money(10m, "USD").Add(new Money(5m, "EUR")));
+            }
+
+            [Fact]
+            public void Subtract_DifferentCurrency_Throws()
+            {
+                Assert.ThrowsAny<System.Exception>(() =>
+                    new Money(10m, "USD").Subtract(new Money(5m, "EUR")));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has `Money.cs` and `Money_Tests.cs`. Two tests
+      are failing (Add_DifferentCurrency_Throws and
+      Subtract_DifferentCurrency_Throws). The bug: `Add` and
+      `Subtract` silently ignore currency mismatch — they just use
+      `this.Currency` and add/subtract the amounts. They should
+      throw when the other operand's Currency doesn't match
+      `this.Currency`.
+
+      Fix: in both `Add` and `Subtract`, add a guard like
+      `if (other.Currency != Currency) throw new InvalidOperationException("currency mismatch");`
+      as the first line.
+
+      Constraints:
+        - DO NOT change any method signature.
+        - DO NOT modify the test file.
+        - The 3 currently-passing tests must stay green.
+
+      DO NOT run `dotnet test` yourself — just edit Money.cs and
+      report done; the bench harness verifies. All 5 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Money.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 5
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  - id: b3-nre-on-empty-input
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      StringHelpers.Truncate throws NullReferenceException when
+      input is null because it dereferences `value.Length` before
+      a null check. Tests verify the method should return the
+      empty string when passed null. Fix by handling null/empty
+      upfront.
+    workspace: empty-git-repo
+    seed_files:
+      Helpers.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Lib</RootNamespace>
+            <AssemblyName>Lib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      StringHelpers.cs: |
+        namespace Lib;
+
+        public static class StringHelpers
+        {
+            /// <summary>
+            /// Returns the first `maxLength` characters of `value`. If
+            /// `value` is null or empty, returns an empty string. If
+            /// `value` is shorter than maxLength, returns it as-is.
+            /// </summary>
+            public static string Truncate(string? value, int maxLength)
+            {
+                if (maxLength < 0) throw new System.ArgumentOutOfRangeException(nameof(maxLength));
+                // BUG: dereferences value before null/empty check.
+                if (value.Length <= maxLength) return value;
+                return value.Substring(0, maxLength);
+            }
+        }
+      StringHelpers_Tests.cs: |
+        namespace Lib;
+
+        public class StringHelpers_Tests
+        {
+            // --- Existing passing test (must stay green) ----------------
+            [Fact]
+            public void Truncate_LongerThanMax_Truncates()
+            {
+                Assert.Equal("hello", StringHelpers.Truncate("hello world", 5));
+            }
+
+            [Fact]
+            public void Truncate_ShorterThanMax_ReturnsAsIs()
+            {
+                Assert.Equal("hi", StringHelpers.Truncate("hi", 10));
+            }
+
+            [Fact]
+            public void Truncate_NegativeMax_Throws()
+            {
+                Assert.ThrowsAny<System.Exception>(() => StringHelpers.Truncate("x", -1));
+            }
+
+            // --- Failing tests exposing the NRE bug ---------------------
+            [Fact]
+            public void Truncate_Null_ReturnsEmpty()
+            {
+                Assert.Equal("", StringHelpers.Truncate(null, 5));
+            }
+
+            [Fact]
+            public void Truncate_Empty_ReturnsEmpty()
+            {
+                Assert.Equal("", StringHelpers.Truncate("", 5));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has `StringHelpers.cs` and `StringHelpers_Tests.cs`.
+      Two tests fail because `Truncate` throws
+      NullReferenceException on null input. The bug: the method
+      checks `value.Length <= maxLength` BEFORE handling null/empty.
+
+      Fix: at the top of `Truncate`, immediately after the negative-
+      max guard, return `string.Empty` when value is null or empty
+      (`string.IsNullOrEmpty(value)` covers both).
+
+      Constraints:
+        - DO NOT change the method signature.
+        - DO NOT modify the test file.
+        - The 3 currently-passing tests must stay green.
+
+      DO NOT run `dotnet test` yourself — just edit StringHelpers.cs
+      and report done; the bench harness verifies. All 5 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: StringHelpers.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 5
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 18

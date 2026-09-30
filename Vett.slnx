@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Replaces Cycles.slnx, which named src/Cycles.Server/Cycles.Server.csproj - a
+     path that does not exist in this repo. `dotnet test` against it restored
+     ZERO projects, printed only "Unable to find a project to restore!" as a
+     *warning*, and exited 0. A gate wired to it passes in 0.1s having run
+     nothing. (Cycles.Server is a fixture the team-games-tier6 suite asks the
+     model to create inside a worktree; the solution file leaked to the repo
+     root and was committed in c5d3c36.)
+
+     Keep both projects listed. `dotnet test` on a solution runs every test
+     project it names, so the positive conjunct - a test COUNT in the output -
+     is what proves this file resolves. Verified 2026-08-26: 955 tests. -->
+<Solution>
+  <Project Path="src/Vett/Vett.csproj" />
+  <Project Path="tests/Vett.Tests/Vett.Tests.csproj" />
+</Solution>

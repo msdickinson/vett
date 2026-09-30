@@ -1,0 +1,22 @@
+{
+  "type": "function",
+  "function": {
+    "name": "ask_user_question",
+    "description": "Ask the user a structured question and wait for their answer. Use this when you genuinely need clarification before proceeding — e.g. \"which framework should I use\", \"is this destructive operation OK\", \"which file did you mean\". Avoid for trivial questions you could resolve from context. The user's answer is returned as the tool result string.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The question to present to the user. Be specific and concise."
+        },
+        "choices": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional list of multiple-choice options. If provided, the chat UI renders them as clickable buttons. Leave empty for a free-text answer."
+        }
+      },
+      "required": ["question"]
+    }
+  }
+}

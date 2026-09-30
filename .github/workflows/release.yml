@@ -1,0 +1,40 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the sidecars, pack the dotnet tool with them
+# inside, and attach both to a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar/go.mod
+
+      - name: Build sidecars
+        working-directory: sidecar
+        run: make sidecar-all
+
+      - name: Pack tool
+        run: |
+          dotnet pack src/Vett/Vett.csproj --configuration Release \
+            -p:Version=${GITHUB_REF_NAME#v} --output nupkg
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" nupkg/*.nupkg bin/vett-sidecar-* \
+            --title "$GITHUB_REF_NAME" --generate-notes

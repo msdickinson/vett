@@ -1,0 +1,407 @@
+name: team-extend-class-tier2
+description: |
+  Extend-existing-class — the failure mode that broke Realmscape v1-v4
+  before the runner-fix landed (an earlier VETT commit). Each instance gives
+  the agent an EXISTING class and asks it to add ONE new method /
+  property / overload via `str_replace`. The wrong reflex is to call
+  `file_editor create` and clobber the file — patches 5 + 6 should
+  catch that.
+
+  Goal: stress the "extend existing code" path that bench suites
+  rarely test directly. Pair with patch-6 (build-error-hint) to
+  measure whether missing-using errors get auto-resolved.
+
+  Run: vett team-bench team-extend-class-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # ec1 — Add a new method to an existing Calculator class
+  # ============================================================
+  - id: ec1-add-sum-method
+    taxonomy: &ec_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Add a Sum(int[]) method to the existing Calculator class.
+    workspace: empty-git-repo
+    seed_files:
+      ExtendClass.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>ExtendClass</RootNamespace>
+            <AssemblyName>ExtendClass</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Calculator.cs: |
+        namespace ExtendClass;
+
+        public class Calculator
+        {
+            public int Add(int a, int b) => a + b;
+            public int Subtract(int a, int b) => a - b;
+        }
+      CalculatorTests.cs: |
+        using ExtendClass;
+
+        namespace ExtendClass.Tests;
+
+        public class CalculatorTests
+        {
+            [Fact] public void Add_Works() => Assert.Equal(5, new Calculator().Add(2, 3));
+            [Fact] public void Sum_AllElements()
+            {
+                var c = new Calculator();
+                Assert.Equal(10, c.Sum(new[] { 1, 2, 3, 4 }));
+            }
+            [Fact] public void Sum_EmptyArrayIsZero() => Assert.Equal(0, new Calculator().Sum(Array.Empty<int>()));
+        }
+    prompt: |
+      Add a new method to the EXISTING `Calculator` class
+      (`Calculator.cs`):
+
+        `int Sum(int[] nums)`
+
+      Returns the sum of all elements (or 0 for empty).
+
+      Do NOT rewrite the file. The existing `Add` and `Subtract`
+      methods MUST remain unchanged. Use `str_replace` to insert
+      the new method.
+
+      Run `dotnet test` and ensure all tests pass.
+      Dispatch one implementer. Accept only after tests green.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 3
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 24
+
+  # ============================================================
+  # ec2 — Add a computed property to an existing record
+  # ============================================================
+  - id: ec2-add-isexpired-method
+    taxonomy: *ec_tax
+    description: Add an IsExpired(DateTime now) instance method to the existing Token record.
+    workspace: empty-git-repo
+    seed_files:
+      ExtendClass.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>ExtendClass</RootNamespace>
+            <AssemblyName>ExtendClass</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Token.cs: |
+        namespace ExtendClass;
+
+        public record Token(string Value, DateTime IssuedAt, TimeSpan Lifetime)
+        {
+            public DateTime ExpiresAt => IssuedAt + Lifetime;
+        }
+      TokenTests.cs: |
+        using ExtendClass;
+
+        namespace ExtendClass.Tests;
+
+        public class TokenTests
+        {
+            [Fact] public void ExpiresAt_Computed()
+            {
+                var t = new Token("v", new DateTime(2025, 1, 1), TimeSpan.FromHours(1));
+                Assert.Equal(new DateTime(2025, 1, 1, 1, 0, 0), t.ExpiresAt);
+            }
+            [Fact] public void IsExpired_TrueWhenPastExpiry()
+            {
+                var t = new Token("v", new DateTime(2025, 1, 1), TimeSpan.FromHours(1));
+                Assert.True(t.IsExpired(new DateTime(2025, 1, 1, 2, 0, 0)));
+            }
+            [Fact] public void IsExpired_FalseWhenBeforeExpiry()
+            {
+                var t = new Token("v", new DateTime(2025, 1, 1), TimeSpan.FromHours(1));
+                Assert.False(t.IsExpired(new DateTime(2025, 1, 1, 0, 30, 0)));
+            }
+        }
+    prompt: |
+      Add a new instance method to the EXISTING `Token` record
+      (`Token.cs`):
+
+        `bool IsExpired(DateTime now)`
+
+      Returns true iff `now >= ExpiresAt`.
+
+      Do NOT change the record's fields or the existing `ExpiresAt`
+      property. Use `str_replace` to insert the new method.
+
+      Run `dotnet test` and ensure all tests pass.
+      Dispatch one implementer. Accept only after tests green.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 3
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 24
+
+  # ============================================================
+  # ec3 — Add an OVERLOAD alongside an existing method
+  # ============================================================
+  - id: ec3-add-overload
+    taxonomy: *ec_tax
+    description: Add an Add(IEnumerable<int>) overload to existing Calculator.
+    workspace: empty-git-repo
+    seed_files:
+      ExtendClass.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>ExtendClass</RootNamespace>
+            <AssemblyName>ExtendClass</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Calculator.cs: |
+        namespace ExtendClass;
+
+        public class Calculator
+        {
+            public int Add(int a, int b) => a + b;
+        }
+      CalculatorTests.cs: |
+        using ExtendClass;
+
+        namespace ExtendClass.Tests;
+
+        public class CalculatorTests
+        {
+            [Fact] public void TwoArgAdd_StillWorks() => Assert.Equal(7, new Calculator().Add(3, 4));
+            [Fact] public void IEnumerableAdd_Sums()
+            {
+                var c = new Calculator();
+                Assert.Equal(15, c.Add(new List<int> { 1, 2, 3, 4, 5 }));
+            }
+        }
+    prompt: |
+      Add an OVERLOAD to the existing `Calculator` class. The new
+      overload signature:
+
+        `int Add(IEnumerable<int> nums)`
+
+      Returns the sum of all elements.
+
+      DO NOT remove or modify the existing `Add(int, int)` method.
+      Use `str_replace` to insert the new overload alongside it.
+
+      Run `dotnet test` and ensure all tests pass.
+      Dispatch one implementer. Accept only after tests green.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 2
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 24
+
+  # ============================================================
+  # ec4 — Add a static helper to an existing static utility class
+  # ============================================================
+  - id: ec4-add-static-helper
+    taxonomy: *ec_tax
+    description: Add static Reverse(string) to existing StringUtils.
+    workspace: empty-git-repo
+    seed_files:
+      ExtendClass.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>ExtendClass</RootNamespace>
+            <AssemblyName>ExtendClass</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      StringUtils.cs: |
+        namespace ExtendClass;
+
+        public static class StringUtils
+        {
+            public static string Upper(string s) => s.ToUpper();
+            public static int Length(string s) => s?.Length ?? 0;
+        }
+      StringUtilsTests.cs: |
+        using ExtendClass;
+
+        namespace ExtendClass.Tests;
+
+        public class StringUtilsTests
+        {
+            [Fact] public void Upper_Works() => Assert.Equal("ABC", StringUtils.Upper("abc"));
+            [Fact] public void Reverse_Basic() => Assert.Equal("cba", StringUtils.Reverse("abc"));
+            [Fact] public void Reverse_Empty() => Assert.Equal("", StringUtils.Reverse(""));
+        }
+    prompt: |
+      Add a new static method to the EXISTING `StringUtils` static
+      class:
+
+        `public static string Reverse(string s)`
+
+      Returns the input string reversed. Empty string returns empty.
+
+      DO NOT remove or modify `Upper` or `Length`. Use `str_replace`
+      to insert the new method.
+
+      Run `dotnet test` and ensure all tests pass.
+      Dispatch one implementer. Accept only after tests green.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 3
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 24
+
+  # ============================================================
+  # ec5 — Add a property AND initialize it in the constructor
+  # ============================================================
+  - id: ec5-add-property-with-init
+    taxonomy: *ec_tax
+    description: Add CreatedAt property to existing Order and init in ctor.
+    workspace: empty-git-repo
+    seed_files:
+      ExtendClass.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>ExtendClass</RootNamespace>
+            <AssemblyName>ExtendClass</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Order.cs: |
+        namespace ExtendClass;
+
+        public class Order
+        {
+            public string Sku { get; }
+            public int Quantity { get; }
+
+            public Order(string sku, int quantity, DateTime createdAt)
+            {
+                Sku = sku;
+                Quantity = quantity;
+            }
+        }
+      OrderTests.cs: |
+        using ExtendClass;
+
+        namespace ExtendClass.Tests;
+
+        public class OrderTests
+        {
+            [Fact] public void Sku_AndQuantity_Set()
+            {
+                var o = new Order("ABC", 5, new DateTime(2025, 1, 1));
+                Assert.Equal("ABC", o.Sku);
+                Assert.Equal(5, o.Quantity);
+            }
+            [Fact] public void CreatedAt_SetFromConstructor()
+            {
+                var o = new Order("ABC", 5, new DateTime(2025, 1, 1));
+                Assert.Equal(new DateTime(2025, 1, 1), o.CreatedAt);
+            }
+        }
+    prompt: |
+      Modify the EXISTING `Order` class:
+        - Add a `CreatedAt` (DateTime) read-only property.
+        - Update the constructor to assign `CreatedAt = createdAt`
+          (the third parameter that's currently ignored).
+
+      Use `str_replace` for both edits. DO NOT rewrite the file.
+      The Sku and Quantity assignments MUST remain unchanged.
+
+      Run `dotnet test` and ensure all tests pass.
+      Dispatch one implementer. Accept only after tests green.
+    timeout_seconds: 480
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 2
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 40
+          leader_iters_max: 24

@@ -1,0 +1,1133 @@
+name: team-classify-archetypes-tier1
+description: |
+  Classification benchmark. Asks the model to classify a ticket-style
+  prompt into one of 8 archetypes (A1-A8, see
+  internal note ticket-archetypes.md). Tests the planner's natural
+  task-shape recognition BEFORE wiring it into the Tier 1B pipeline.
+
+  Each instance:
+    - Sends a single ticket-style prompt to the leader
+    - Instructs leader to end its response with `[ARCHETYPE: AX]`
+    - Asserts the right token appears
+
+  This is orthogonal to the execution benchmarks. We measure two
+  things: (1) is the model's classification correct (accuracy %), and
+  (2) what's the confusion matrix (which archetypes get conflated).
+
+  Run: vett team-bench team-classify-archetypes-tier1
+
+profile: ds-team-flash
+tier: 1
+
+instances:
+  # ============================================================
+  # A1 — Lookup / Q&A (no code change)
+  # ============================================================
+  - id: cls-a1-1-where-is-defined
+    taxonomy: &cls_tax
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A1 — pure lookup
+    workspace: empty-git-repo
+    prompt: &cls_prompt_prefix |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, think about the task shape, then
+      respond with one short sentence of reasoning followed by EXACTLY
+      this token on its own line at the end of your reply:
+
+          [ARCHETYPE: AX]
+
+      where X is 1..8. Use exactly that format — bracket, "ARCHETYPE:",
+      space, the letter A, a digit 1-8, close bracket. No other text on
+      that line.
+
+      The archetypes:
+        A1 — Lookup / Q&A. No code change. Read + report.
+        A2 — Single-file edit. One file, trivial change or fresh create.
+        A3 — Bug fix. Locate + fix in one file; tests prove correctness.
+        A4 — Single-method implementation. Write one function from spec.
+        A5 — Single-class implementation. Class with multiple methods + invariants.
+        A6 — Multi-file feature. Coordinated changes across 2-5 files.
+        A7 — Bounded context. Multi-aggregate domain feature.
+        A8 — Greenfield application. Build a whole app from a one-line spec.
+
+      Ticket:
+      ---
+      Where in the codebase is the `Money.Add` method defined? I just
+      want to know the file path.
+    timeout_seconds: 90
+    assertions: &cls_assert_a1
+      - assistant_text_contains: "[ARCHETYPE: A1]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a1-2-explain-flow
+    taxonomy: *cls_tax
+    description: A1 — explanation request
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, think about the task shape, then
+      respond with one short sentence of reasoning followed by EXACTLY
+      this token on its own line at the end of your reply:
+
+          [ARCHETYPE: AX]
+
+      where X is 1..8. Use exactly that format — bracket, "ARCHETYPE:",
+      space, the letter A, a digit 1-8, close bracket. No other text on
+      that line.
+
+      The archetypes:
+        A1 — Lookup / Q&A. No code change. Read + report.
+        A2 — Single-file edit. One file, trivial change or fresh create.
+        A3 — Bug fix. Locate + fix in one file; tests prove correctness.
+        A4 — Single-method implementation. Write one function from spec.
+        A5 — Single-class implementation. Class with multiple methods + invariants.
+        A6 — Multi-file feature. Coordinated changes across 2-5 files.
+        A7 — Bounded context. Multi-aggregate domain feature.
+        A8 — Greenfield application. Build a whole app from a one-line spec.
+
+      Ticket:
+      ---
+      Can you walk me through how the checkout flow works in our codebase?
+      I'm onboarding and trying to build a mental model. Just an
+      explanation; no changes needed.
+    timeout_seconds: 90
+    assertions: *cls_assert_a1
+
+  - id: cls-a1-3-find-todo
+    taxonomy: *cls_tax
+    description: A1 — find marker across files
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, think about the task shape, then
+      respond with one short sentence of reasoning followed by EXACTLY
+      this token on its own line at the end of your reply:
+
+          [ARCHETYPE: AX]
+
+      where X is 1..8. Use exactly that format — bracket, "ARCHETYPE:",
+      space, the letter A, a digit 1-8, close bracket. No other text on
+      that line.
+
+      The archetypes:
+        A1 — Lookup / Q&A. No code change. Read + report.
+        A2 — Single-file edit. One file, trivial change or fresh create.
+        A3 — Bug fix. Locate + fix in one file; tests prove correctness.
+        A4 — Single-method implementation. Write one function from spec.
+        A5 — Single-class implementation. Class with multiple methods + invariants.
+        A6 — Multi-file feature. Coordinated changes across 2-5 files.
+        A7 — Bounded context. Multi-aggregate domain feature.
+        A8 — Greenfield application. Build a whole app from a one-line spec.
+
+      Ticket:
+      ---
+      Search the repo and tell me which files still have unresolved
+      TODO comments. I'll prioritize from there.
+    timeout_seconds: 90
+    assertions: *cls_assert_a1
+
+  - id: cls-a1-4-config-value
+    taxonomy: *cls_tax
+    description: A1 — config lookup
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, think about the task shape, then
+      respond with one short sentence of reasoning followed by EXACTLY
+      this token on its own line at the end of your reply:
+
+          [ARCHETYPE: AX]
+
+      where X is 1..8. Use exactly that format — bracket, "ARCHETYPE:",
+      space, the letter A, a digit 1-8, close bracket. No other text on
+      that line.
+
+      The archetypes:
+        A1 — Lookup / Q&A. No code change. Read + report.
+        A2 — Single-file edit. One file, trivial change or fresh create.
+        A3 — Bug fix. Locate + fix in one file; tests prove correctness.
+        A4 — Single-method implementation. Write one function from spec.
+        A5 — Single-class implementation. Class with multiple methods + invariants.
+        A6 — Multi-file feature. Coordinated changes across 2-5 files.
+        A7 — Bounded context. Multi-aggregate domain feature.
+        A8 — Greenfield application. Build a whole app from a one-line spec.
+
+      Ticket:
+      ---
+      What port does the staging API listen on? I think it's in one of
+      the YAML configs. Just need the number.
+    timeout_seconds: 90
+    assertions: *cls_assert_a1
+
+  - id: cls-a1-5-which-impl
+    taxonomy: *cls_tax
+    description: A1 — which class
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, think about the task shape, then
+      respond with one short sentence of reasoning followed by EXACTLY
+      this token on its own line at the end of your reply:
+
+          [ARCHETYPE: AX]
+
+      where X is 1..8. Use exactly that format — bracket, "ARCHETYPE:",
+      space, the letter A, a digit 1-8, close bracket. No other text on
+      that line.
+
+      The archetypes:
+        A1 — Lookup / Q&A. No code change. Read + report.
+        A2 — Single-file edit. One file, trivial change or fresh create.
+        A3 — Bug fix. Locate + fix in one file; tests prove correctness.
+        A4 — Single-method implementation. Write one function from spec.
+        A5 — Single-class implementation. Class with multiple methods + invariants.
+        A6 — Multi-file feature. Coordinated changes across 2-5 files.
+        A7 — Bounded context. Multi-aggregate domain feature.
+        A8 — Greenfield application. Build a whole app from a one-line spec.
+
+      Ticket:
+      ---
+      Which class is actually wired up as our IEmailSender in DI?
+      I see three implementations and I'm not sure which one runs.
+    timeout_seconds: 90
+    assertions: *cls_assert_a1
+
+  # ============================================================
+  # A2 — Single-file edit
+  # ============================================================
+  - id: cls-a2-1-bump-version
+    taxonomy: *cls_tax
+    description: A2 — version bump
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Bump the version in package.json from 1.4.2 to 1.4.3. Just that
+      one field, leave everything else alone.
+    timeout_seconds: 90
+    assertions: &cls_assert_a2
+      - assistant_text_contains: "[ARCHETYPE: A2]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a2-2-add-license
+    taxonomy: *cls_tax
+    description: A2 — add LICENSE
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add a LICENSE file to the repo with the MIT license text. We
+      forgot when we initialized.
+    timeout_seconds: 90
+    assertions: *cls_assert_a2
+
+  - id: cls-a2-3-fix-typo-readme
+    taxonomy: *cls_tax
+    description: A2 — typo in README
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Fix the typo in README.md — line 12 says "compatable" should be
+      "compatible". Pure docs.
+    timeout_seconds: 90
+    assertions: *cls_assert_a2
+
+  - id: cls-a2-4-add-gitignore
+    taxonomy: *cls_tax
+    description: A2 — gitignore line
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add `*.local.yaml` to .gitignore. Some devs were accidentally
+      committing their local overrides.
+    timeout_seconds: 90
+    assertions: *cls_assert_a2
+
+  - id: cls-a2-5-rename-constant
+    taxonomy: *cls_tax
+    description: A2 — rename one constant
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      In Constants.cs change `DEFAULT_PORT = 8080` to `DEFAULT_PORT = 8443`.
+      It's used in exactly one place and we're switching to HTTPS-by-default.
+    timeout_seconds: 90
+    assertions: *cls_assert_a2
+
+  # ============================================================
+  # A3 — Bug fix
+  # ============================================================
+  - id: cls-a3-1-off-by-one
+    taxonomy: *cls_tax
+    description: A3 — off-by-one
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Pagination is off by one — page=1 returns items 1..N instead of
+      0..N-1. The PaginationTests fixture has two red tests showing the
+      expected behavior. Fix it without changing the public signature.
+    timeout_seconds: 90
+    assertions: &cls_assert_a3
+      - assistant_text_contains: "[ARCHETYPE: A3]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a3-2-nre
+    taxonomy: *cls_tax
+    description: A3 — null reference
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      `StringHelpers.Truncate` throws an NRE when given a null input.
+      The test expects empty-string-in → empty-string-out. Fix the null
+      handling. One file, one method.
+    timeout_seconds: 90
+    assertions: *cls_assert_a3
+
+  - id: cls-a3-3-date-tz
+    taxonomy: *cls_tax
+    description: A3 — timezone bug
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Bug: `ReportService.GenerateDailyReport()` uses `DateTime.Now`
+      which produces wrong rows on hosts in non-UTC timezones. There's
+      a failing test `DailyReport_UsesUtc`. Switch the implementation
+      to `DateTime.UtcNow`. Single file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a3
+
+  - id: cls-a3-4-validation
+    taxonomy: *cls_tax
+    description: A3 — currency validation
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      `Money.Add` doesn't validate that currencies match; it silently
+      sums different-currency amounts. There's a red test
+      `Money_Add_DifferentCurrency_Throws`. Make Add (and Subtract)
+      throw on currency mismatch.
+    timeout_seconds: 90
+    assertions: *cls_assert_a3
+
+  - id: cls-a3-5-encoding
+    taxonomy: *cls_tax
+    description: A3 — encoding bug
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      `ExportCsv.Save(path, rows)` writes UTF-16 because we forgot the
+      encoding argument. Downstream excel-import tooling assumes UTF-8.
+      The test `Export_IsUtf8` fails. Pass `Encoding.UTF8` explicitly.
+      Single line change in one file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a3
+
+  # ============================================================
+  # A4 — Single-method implementation
+  # ============================================================
+  - id: cls-a4-1-palindrome
+    taxonomy: *cls_tax
+    description: A4 — implement palindrome
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement `bool IsPalindrome(string s)`. Case-insensitive, ignore
+      non-alphanumeric. Empty and single-char strings count as
+      palindromes. There's a test suite with about 30 InlineData cases.
+      One method, one file.
+    timeout_seconds: 90
+    assertions: &cls_assert_a4
+      - assistant_text_contains: "[ARCHETYPE: A4]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a4-2-roman
+    taxonomy: *cls_tax
+    description: A4 — roman numeral
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement `int RomanToInt(string)` that converts valid roman
+      numerals to integers and throws on invalid input (empty,
+      lowercase, non-roman chars, whitespace in middle). Tests cover
+      ~25 cases.
+    timeout_seconds: 90
+    assertions: *cls_assert_a4
+
+  - id: cls-a4-3-merge-intervals
+    taxonomy: *cls_tax
+    description: A4 — merge intervals
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Need a helper `MergeIntervals(List<(int,int)> intervals)` that
+      merges overlapping or touching intervals and returns the result
+      sorted by start. There's a test fixture; ~12 cases.
+    timeout_seconds: 90
+    assertions: *cls_assert_a4
+
+  - id: cls-a4-4-hash-helper
+    taxonomy: *cls_tax
+    description: A4 — hash helper
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add a single helper `string Sha256Hex(string input)` that returns
+      the SHA-256 hash as lowercase hex. Existing test suite has 8
+      known-vector cases to pass.
+    timeout_seconds: 90
+    assertions: *cls_assert_a4
+
+  - id: cls-a4-5-validator-fn
+    taxonomy: *cls_tax
+    description: A4 — email validator
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement `bool IsValidEmail(string s)` covering the conservative
+      RFC subset (one '@', non-empty parts, dot in domain, no
+      whitespace). Tests cover 20 valid + 15 invalid cases. Single
+      static method in Validators.cs.
+    timeout_seconds: 90
+    assertions: *cls_assert_a4
+
+  # ============================================================
+  # A5 — Single-class implementation
+  # ============================================================
+  - id: cls-a5-1-money-vo
+    taxonomy: *cls_tax
+    description: A5 — Money VO
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement a `Money` value object: Amount + Currency, Add/Subtract
+      that throw on currency mismatch, value-equality Equals/GetHashCode,
+      sensible ToString. Tests have ~13 cases. One file.
+    timeout_seconds: 90
+    assertions: &cls_assert_a5
+      - assistant_text_contains: "[ARCHETYPE: A5]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a5-2-stack
+    taxonomy: *cls_tax
+    description: A5 — BoundedStack
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement `BoundedStack<T>(int capacity)` with Push/Pop/Peek/Count
+      and the IsEmpty/IsFull invariants. Push when full throws; Pop /
+      Peek when empty throw; negative capacity throws at construction.
+      Capacity 0 is both empty AND full. 8 test cases in a single file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a5
+
+  - id: cls-a5-3-lru-from-tests
+    taxonomy: *cls_tax
+    description: A5 — LRU from tests
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      We have a test fixture for an LRU cache (fixed capacity, evicts
+      least-recently-used on overflow, Get promotes to most-recent). No
+      spec doc — just the tests. Make the tests pass. One file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a5
+
+  - id: cls-a5-4-temp-vo
+    taxonomy: *cls_tax
+    description: A5 — Temperature VO
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add a `Temperature` value object: stores Kelvin, exposes Celsius
+      + Fahrenheit derived, FromCelsius/FromFahrenheit factories, throws
+      below absolute zero. Implement IComparable. ~12 tests; single file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a5
+
+  - id: cls-a5-5-rate-limiter
+    taxonomy: *cls_tax
+    description: A5 — rate limiter
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Need a single `TokenBucket` class with capacity + refill rate +
+      Take(n)/CanTake(n) API. Thread-safety not required for v1. Tests
+      cover capacity, refill, and overflow. One class, one file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a5
+
+  # ============================================================
+  # A6 — Multi-file feature
+  # ============================================================
+  - id: cls-a6-1-order-aggregate
+    taxonomy: *cls_tax
+    description: A6 — Order aggregate
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build an Order aggregate: root Order with a list of OrderLine
+      entities and Money VO. Invariants: closed orders reject AddLine,
+      subtotal = sum of line.Quantity * line.UnitPrice, currency
+      mismatch on AddLine throws. Three files (Order, OrderLine, Money),
+      one test project.
+    timeout_seconds: 90
+    assertions: &cls_assert_a6
+      - assistant_text_contains: "[ARCHETYPE: A6]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a6-2-controller-action
+    taxonomy: *cls_tax
+    description: A6 — controller action
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add a new GET /api/widgets/{id} endpoint that returns a Widget
+      DTO as JSON. Needs a controller action + the DTO record + a
+      mapper from the existing domain entity. Three files. There's a
+      test project that asserts the JSON shape.
+    timeout_seconds: 90
+    assertions: *cls_assert_a6
+
+  - id: cls-a6-3-validator-feature
+    taxonomy: *cls_tax
+    description: A6 — validator feature
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Add request validation to user registration. Need: a
+      CreateUserRequest DTO, a CreateUserRequestValidator that checks
+      required fields + email format + password rules, and wire it
+      into the controller. Three or four files; tests are in place.
+    timeout_seconds: 90
+    assertions: *cls_assert_a6
+
+  - id: cls-a6-4-add-discount-to-order
+    taxonomy: *cls_tax
+    description: A6 — add discount feature
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      The Order aggregate (Order + OrderLine + Money) is implemented
+      and all 14 tests are green. Add a Discount value object + a
+      DiscountedSubtotal property on Order. The test suite has 4 new
+      red tests for the discount; keep the existing 14 green.
+    timeout_seconds: 90
+    assertions: *cls_assert_a6
+
+  - id: cls-a6-5-refactor-vo
+    taxonomy: *cls_tax
+    description: A6 — primitive obsession refactor
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Refactor User to stop using raw `string email` and `string phone`.
+      Introduce Email and PhoneNumber VOs and update the User class +
+      tests to use them. Keep external behavior identical. Four files.
+    timeout_seconds: 90
+    assertions: *cls_assert_a6
+
+  # ============================================================
+  # A7 — Bounded context
+  # ============================================================
+  - id: cls-a7-1-checkout-flow
+    taxonomy: *cls_tax
+    description: A7 — checkout flow
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build the checkout context: Cart aggregate (mutable), Order
+      aggregate (immutable after Place), and a CheckoutService that
+      validates the cart (non-empty, currency consistency), produces
+      an Order, and clears the Cart. Multi-aggregate; tests verify
+      happy-path + validation failures.
+    timeout_seconds: 90
+    assertions: &cls_assert_a7
+      - assistant_text_contains: "[ARCHETYPE: A7]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a7-2-bank-transfer
+    taxonomy: *cls_tax
+    description: A7 — bank transfer
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Implement the bank-transfer feature: Account aggregate + a
+      TransferService coordinating Transfer(from, to, amount). Failed
+      transfers must leave BOTH accounts unchanged (validate-before-
+      mutate). Tests verify overdraft rollback, currency mismatch
+      rollback, same-account rejection, successful transfer updates
+      each side exactly once.
+    timeout_seconds: 90
+    assertions: *cls_assert_a7
+
+  - id: cls-a7-3-event-sourced
+    taxonomy: *cls_tax
+    description: A7 — event sourcing
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Convert the BankAccount aggregate to event-sourced. Open / Deposit
+      / Withdraw append to UncommittedEvents. A static Replay(events)
+      factory rebuilds an aggregate from a known event stream. Tests
+      verify mutation + replay + uncommitted-clearing all stay
+      consistent. Multiple event-class files + the aggregate.
+    timeout_seconds: 90
+    assertions: *cls_assert_a7
+
+  - id: cls-a7-4-acl
+    taxonomy: *cls_tax
+    description: A7 — anti-corruption layer
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build an Anti-Corruption Layer between Sales and Inventory. Sales
+      owns SalesOrder + SalesLineItem with ProductCode. Inventory owns
+      its own per-SKU stock model. The ACL translates a SalesOrder into
+      Inventory reservation operations via a product-code → SKU map.
+      Unmapped product codes are rejected before any Inventory mutation.
+    timeout_seconds: 90
+    assertions: *cls_assert_a7
+
+  - id: cls-a7-5-auth-context
+    taxonomy: *cls_tax
+    description: A7 — auth context
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build the authentication context: User + Session aggregates,
+      PasswordHasher service, LoginService that validates credentials +
+      issues sessions + handles rate-limit policy. Tests cover
+      happy-path login, wrong password, locked account, session
+      expiry. Five+ files, integrated.
+    timeout_seconds: 90
+    assertions: *cls_assert_a7
+
+  # ============================================================
+  # A8 — Greenfield application
+  # ============================================================
+  - id: cls-a8-1-blocks
+    taxonomy: *cls_tax
+    description: A8 — Blocks
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build a 2-player online Blocks game as an HTML app, with an AI
+      bot fallback when there's no second human player. Multi-file
+      (HTML, CSS, game-state JS, AI-bot JS). Greenfield — no existing
+      code to start from.
+    timeout_seconds: 90
+    assertions: &cls_assert_a8
+      - assistant_text_contains: "[ARCHETYPE: A8]"
+      - no_event: dispatch_start
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 4
+
+  - id: cls-a8-2-todo-app
+    taxonomy: *cls_tax
+    description: A8 — TODO app
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build a TODO app with local storage persistence. Single page,
+      add/edit/delete/check tasks, filter by status. Empty repo; pick
+      your stack (vanilla JS preferred).
+    timeout_seconds: 90
+    assertions: *cls_assert_a8
+
+  - id: cls-a8-3-markdown-editor
+    taxonomy: *cls_tax
+    description: A8 — Markdown editor
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build a Markdown editor with live preview. Split-pane: textarea on
+      left, rendered HTML on right. Support headings, bold/italic,
+      lists, code blocks, links. Greenfield, single-file HTML or small
+      multi-file.
+    timeout_seconds: 90
+    assertions: *cls_assert_a8
+
+  - id: cls-a8-4-budget-tracker
+    taxonomy: *cls_tax
+    description: A8 — budget tracker
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build a personal budget tracker: enter expenses with category +
+      date + amount, see monthly totals + per-category breakdown, simple
+      bar chart. Persistence in browser. Empty repo.
+    timeout_seconds: 90
+    assertions: *cls_assert_a8
+
+  - id: cls-a8-5-pomodoro
+    taxonomy: *cls_tax
+    description: A8 — Pomodoro app
+    workspace: empty-git-repo
+    prompt: |
+      You are classifying a software-development ticket into ONE of
+      eight archetypes. Do NOT dispatch members. Do NOT touch the
+      filesystem. Read the ticket, then respond with one short sentence
+      of reasoning followed by EXACTLY `[ARCHETYPE: AX]` (X is 1..8) on
+      its own line at the end.
+
+      Archetypes:
+        A1 Lookup, A2 Single-file edit, A3 Bug fix, A4 Single-method,
+        A5 Single-class, A6 Multi-file feature, A7 Bounded context,
+        A8 Greenfield app.
+
+      Ticket:
+      ---
+      Build a Pomodoro timer app: 25-min work / 5-min break cycles,
+      pause/resume, optional long break every 4 cycles, sound on
+      transitions, persistent stats per day. Greenfield, browser-only.
+    timeout_seconds: 90
+    assertions: *cls_assert_a8

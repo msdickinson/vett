@@ -1,0 +1,452 @@
+name: team-aggregate-tier2
+description: |
+  Tier 2: implement a small DDD aggregate (root + entity + VO) with
+  invariants enforced at the aggregate boundary. This is a step up
+  from team-class-tier2 (single class) — multiple classes that
+  collaborate, and the test suite verifies BOTH per-class behavior
+  AND aggregate-level invariants ("can't add to a closed Order",
+  "Subtotal is sum of OrderLine totals", etc).
+
+  Each instance ships:
+    - <Aggregate>.csproj — single .NET 10 test project
+    - <Aggregate>_Tests.cs — xUnit tests covering structural and
+      invariant cases
+  The agent creates the implementation files (multiple .cs files),
+  one class per file, and the harness runs `dotnet test`.
+
+  Run: vett team-bench team-aggregate-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: a1-order-aggregate
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Implement an Order aggregate — root Order with a list of
+      OrderLine entities and a Money VO. Invariants:
+        - Money currency-mismatch on AddLine: throw
+        - Closed orders reject AddLine and Close (idempotency: re-Close throws)
+        - Subtotal = sum of (line.Quantity * line.UnitPrice) per line
+        - Removing a line by id only works while open; missing id throws
+    workspace: empty-git-repo
+    seed_files:
+      Order.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Order_Tests.cs: |
+        using System.Linq;
+
+        namespace Domain;
+
+        public class Order_Tests
+        {
+            // --- Money VO -----------------------------------------------
+            [Fact]
+            public void Money_Equals_ByValue()
+            {
+                Assert.Equal(new Money(10, "USD"), new Money(10, "USD"));
+                Assert.NotEqual(new Money(10, "USD"), new Money(11, "USD"));
+                Assert.NotEqual(new Money(10, "USD"), new Money(10, "EUR"));
+            }
+
+            [Fact]
+            public void Money_Add_DifferentCurrency_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => new Money(1, "USD").Add(new Money(1, "EUR")));
+            }
+
+            // --- Order ctor / id / status -----------------------------
+            [Fact]
+            public void New_Order_HasIdAndIsOpen()
+            {
+                var o = new Order("USD");
+                Assert.NotEqual(Guid.Empty, o.Id);
+                Assert.False(o.IsClosed);
+                Assert.Empty(o.Lines);
+            }
+
+            // --- AddLine ----------------------------------------------
+            [Fact]
+            public void AddLine_AppendsLineWithGeneratedId()
+            {
+                var o = new Order("USD");
+                var lineId = o.AddLine("WIDGET-1", 2, new Money(5, "USD"));
+                Assert.NotEqual(Guid.Empty, lineId);
+                Assert.Single(o.Lines);
+                var line = o.Lines.Single();
+                Assert.Equal(lineId, line.Id);
+                Assert.Equal("WIDGET-1", line.Sku);
+                Assert.Equal(2, line.Quantity);
+                Assert.Equal(new Money(5, "USD"), line.UnitPrice);
+            }
+
+            [Fact]
+            public void AddLine_DifferentCurrency_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 1, new Money(1, "EUR")));
+            }
+
+            [Fact]
+            public void AddLine_NegativeQuantity_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 0, new Money(1, "USD")));
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", -1, new Money(1, "USD")));
+            }
+
+            // --- Subtotal ---------------------------------------------
+            [Fact]
+            public void Subtotal_SumsLineTotals()
+            {
+                var o = new Order("USD");
+                o.AddLine("A", 2, new Money(5, "USD"));    // 10
+                o.AddLine("B", 3, new Money(2.5m, "USD")); // 7.5
+                o.AddLine("C", 1, new Money(0.5m, "USD")); // 0.5
+                Assert.Equal(new Money(18m, "USD"), o.Subtotal);
+            }
+
+            [Fact]
+            public void Subtotal_EmptyOrder_IsZeroInOrderCurrency()
+            {
+                var o = new Order("USD");
+                Assert.Equal(new Money(0, "USD"), o.Subtotal);
+            }
+
+            // --- RemoveLine -------------------------------------------
+            [Fact]
+            public void RemoveLine_ById_RemovesLine()
+            {
+                var o = new Order("USD");
+                var l1 = o.AddLine("A", 1, new Money(1, "USD"));
+                var l2 = o.AddLine("B", 1, new Money(1, "USD"));
+                o.RemoveLine(l1);
+                Assert.Single(o.Lines);
+                Assert.Equal(l2, o.Lines.Single().Id);
+            }
+
+            [Fact]
+            public void RemoveLine_MissingId_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(() => o.RemoveLine(Guid.NewGuid()));
+            }
+
+            // --- Close ------------------------------------------------
+            [Fact]
+            public void Close_FlipsStatus()
+            {
+                var o = new Order("USD");
+                o.AddLine("X", 1, new Money(1, "USD"));
+                o.Close();
+                Assert.True(o.IsClosed);
+            }
+
+            [Fact]
+            public void Close_Twice_Throws()
+            {
+                var o = new Order("USD");
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.Close());
+            }
+
+            [Fact]
+            public void AddLine_WhenClosed_Throws()
+            {
+                var o = new Order("USD");
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.AddLine("X", 1, new Money(1, "USD")));
+            }
+
+            [Fact]
+            public void RemoveLine_WhenClosed_Throws()
+            {
+                var o = new Order("USD");
+                var lineId = o.AddLine("X", 1, new Money(1, "USD"));
+                o.Close();
+                Assert.ThrowsAny<Exception>(() => o.RemoveLine(lineId));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Build a small DDD Order aggregate. Create THREE files in the
+      workspace root, all under the `Domain` namespace:
+
+      1. `Money.cs` — value object
+         - public Money(decimal amount, string currency)
+         - public decimal Amount { get; }
+         - public string  Currency { get; }
+         - public Money Add(Money other) — throws on currency mismatch
+         - override Equals + GetHashCode (value semantics)
+
+      2. `OrderLine.cs` — entity (has identity)
+         - public Guid    Id        { get; }
+         - public string  Sku       { get; }
+         - public int     Quantity  { get; }
+         - public Money   UnitPrice { get; }
+         - public Money   Total     { get; }   (Quantity * UnitPrice.Amount, in UnitPrice.Currency)
+         - constructor: throws if Quantity <= 0
+
+      3. `Order.cs` — aggregate root
+         - public Guid Id { get; }
+         - public string Currency { get; }
+         - public bool IsClosed { get; }
+         - public IReadOnlyList<OrderLine> Lines { get; }
+         - public Money Subtotal { get; }   (sum of line.Total; zero in
+           Order.Currency for empty orders)
+         - public Order(string currency)
+         - public Guid AddLine(string sku, int quantity, Money unitPrice)
+              returns the new line's Id; throws if order IsClosed,
+              if currency doesn't match Order.Currency, or if quantity
+              is non-positive.
+         - public void RemoveLine(Guid lineId)
+              throws if order IsClosed or if no line has that Id.
+         - public void Close()
+              flips IsClosed; throws if already closed.
+
+      DO NOT run `dotnet test` yourself — just create the three .cs
+      files and report done; the bench harness verifies. Seeded
+      `Order_Tests.cs` has 14 cases covering Money, OrderLine, and
+      Order behavior; all must pass.
+    timeout_seconds: 540
+    assertions:
+      - file: Money.cs
+        exists: true
+      - file: OrderLine.cs
+        exists: true
+      - file: Order.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 14
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 16
+
+  - id: a2-inventory-aggregate
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Implement an Inventory aggregate — root Inventory with a
+      dictionary of stock by SKU. Invariants:
+        - Restock with non-positive qty throws
+        - Reserve(sku, qty) requires available >= qty (else throws),
+          decrements available and increments reserved.
+        - Release(sku, qty) increases available, decreases reserved;
+          can't release more than reserved.
+        - Ship(sku, qty) decreases reserved AND total stock.
+        - Total stock per sku = available + reserved.
+    workspace: empty-git-repo
+    seed_files:
+      Inventory.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Inventory_Tests.cs: |
+        namespace Domain;
+
+        public class Inventory_Tests
+        {
+            [Fact]
+            public void New_Inventory_IsEmpty()
+            {
+                var inv = new Inventory();
+                Assert.Equal(0, inv.AvailableOf("ANY"));
+                Assert.Equal(0, inv.ReservedOf("ANY"));
+                Assert.Equal(0, inv.TotalOf("ANY"));
+            }
+
+            [Fact]
+            public void Restock_AddsToAvailable()
+            {
+                var inv = new Inventory();
+                inv.Restock("WIDGET", 10);
+                Assert.Equal(10, inv.AvailableOf("WIDGET"));
+                Assert.Equal(0, inv.ReservedOf("WIDGET"));
+                Assert.Equal(10, inv.TotalOf("WIDGET"));
+            }
+
+            [Fact]
+            public void Restock_Cumulative()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 5);
+                inv.Restock("X", 3);
+                Assert.Equal(8, inv.AvailableOf("X"));
+            }
+
+            [Fact]
+            public void Restock_NonPositive_Throws()
+            {
+                var inv = new Inventory();
+                Assert.ThrowsAny<Exception>(() => inv.Restock("X", 0));
+                Assert.ThrowsAny<Exception>(() => inv.Restock("X", -1));
+            }
+
+            [Fact]
+            public void Reserve_MovesAvailableToReserved()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 10);
+                inv.Reserve("X", 3);
+                Assert.Equal(7, inv.AvailableOf("X"));
+                Assert.Equal(3, inv.ReservedOf("X"));
+                Assert.Equal(10, inv.TotalOf("X"));   // total unchanged
+            }
+
+            [Fact]
+            public void Reserve_MoreThanAvailable_Throws()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 5);
+                Assert.ThrowsAny<Exception>(() => inv.Reserve("X", 6));
+            }
+
+            [Fact]
+            public void Reserve_UnknownSku_Throws()
+            {
+                var inv = new Inventory();
+                Assert.ThrowsAny<Exception>(() => inv.Reserve("MISSING", 1));
+            }
+
+            [Fact]
+            public void Release_MovesReservedBackToAvailable()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 10);
+                inv.Reserve("X", 5);
+                inv.Release("X", 2);
+                Assert.Equal(7, inv.AvailableOf("X"));
+                Assert.Equal(3, inv.ReservedOf("X"));
+                Assert.Equal(10, inv.TotalOf("X"));
+            }
+
+            [Fact]
+            public void Release_MoreThanReserved_Throws()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 10);
+                inv.Reserve("X", 3);
+                Assert.ThrowsAny<Exception>(() => inv.Release("X", 4));
+            }
+
+            [Fact]
+            public void Ship_DecrementsReservedAndTotal()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 10);
+                inv.Reserve("X", 5);
+                inv.Ship("X", 3);
+                Assert.Equal(5, inv.AvailableOf("X"));
+                Assert.Equal(2, inv.ReservedOf("X"));
+                Assert.Equal(7, inv.TotalOf("X"));
+            }
+
+            [Fact]
+            public void Ship_MoreThanReserved_Throws()
+            {
+                var inv = new Inventory();
+                inv.Restock("X", 10);
+                inv.Reserve("X", 2);
+                Assert.ThrowsAny<Exception>(() => inv.Ship("X", 3));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Create `Inventory.cs` in the workspace root containing a
+      public class `Inventory` in the `Domain` namespace, modeling
+      a per-SKU stock with Available + Reserved sub-counts.
+
+      Public surface (all int qty, signed appropriately):
+        - public Inventory()
+        - public int AvailableOf(string sku)   — 0 if unknown
+        - public int ReservedOf(string sku)    — 0 if unknown
+        - public int TotalOf(string sku)       — Available + Reserved
+        - public void Restock(string sku, int qty)
+            adds qty to Available; throws if qty <= 0.
+        - public void Reserve(string sku, int qty)
+            moves qty from Available to Reserved;
+            throws if Available < qty (covers unknown SKU as Available=0).
+        - public void Release(string sku, int qty)
+            moves qty from Reserved back to Available;
+            throws if Reserved < qty.
+        - public void Ship(string sku, int qty)
+            decrements Reserved by qty AND decrements TOTAL by qty
+            (i.e. items physically leave); throws if Reserved < qty.
+
+      Invariant: Available, Reserved, Total are never negative.
+
+      DO NOT run `dotnet test` yourself — just create Inventory.cs
+      and report done; the bench harness verifies. Seeded
+      `Inventory_Tests.cs` has 11 cases; all must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Inventory.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 11
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 16

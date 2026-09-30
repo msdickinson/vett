@@ -1,0 +1,57 @@
+name: probe-truncation-control
+description: |
+  ⭐ THE NEGATIVE CONTROL FOR probe-truncation.yaml. Byte-identical to it
+  except for `max_output_tokens` (4096 here, 48 there) and this block.
+  Do not run real work with it.
+
+  WHY IT EXISTS. probe-truncation firing proves the recovery CAN fire. It
+  does not prove the recovery fires for the right REASON: a branch that
+  triggered on every reply, or on any reply without a tool call, would
+  light up that probe exactly the same way and look like a working fix.
+  This profile runs the identical prompt against the identical endpoint
+  with room to finish, so `finish_reason` is the only thing that differs
+  between the two runs.
+
+  MEASURED 2026-09-01, both against gpu-2:8000 / deepseek-v4-flash,
+  same prompt, same cwd:
+
+    probe-truncation (48)     it1 out_tok=48 finish_reason="length"
+                              -> truncated_response_recovery retry 1/3
+                              it2 out_tok=29 finish_reason="stop"  (model
+                                 complied with the nudge and got on with it)
+
+    this profile   (4096)     it1 out_tok=30 finish_reason="stop"
+                              -> NO recovery event
+
+  That pair is what closes the last untested link. The unit tests set
+  ChatResponse.FinishReason directly, so they assume the field arrives; a
+  raw wire POST proved the SERVER emits it. Neither covers whether
+  Microsoft.Extensions.AI's OpenAI client MAPS it through instead of
+  dropping it -- and a recovery keyed on a field the SDK never populates
+  emits nothing, fires never, and is indistinguishable from a clean run.
+  These two profiles distinguish it.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  # provider: is a CODE-PATH SELECTOR, not a locality claim; `endpoint` is
+  # what tells the truth about where the tokens are produced.
+  provider: local
+  endpoint: http://gpu-2:8000/v1
+  model: deepseek-v4-flash
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 60
+  num_retries: 0
+  # ⭐ THE ONLY VARIABLE. Ample room, so the same prompt finishes normally.
+  max_output_tokens: 4096
+
+system_prompt: |
+  You are a careful engineer. Before doing anything else, explain your
+  reasoning at length in prose — walk through every consideration in
+  detail — and only afterwards make a tool call.
+
+timeout_minutes: 5
+max_iterations: 8

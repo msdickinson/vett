@@ -1,0 +1,1540 @@
+name: team-python-web-tier2
+description: |
+  ✅ REPAIRED 2026-08-25. Both arms now run against local Flash on the Sparks.
+
+  ⛔ RETRACTION of the banner this replaces. It said the arms pointed at
+  old-gpu-a:8000 "which is dead" and named `aeon-mtp`, "the retired AEON
+  Qwen3.6-27B". The old-gpu-a half was WRONG: old-gpu-a was gpu-2's address before the
+  2026-08-22 DHCP re-lease — a VACATED ADDRESS, not a dead machine. gpu-2 is
+  alive at .100 and serves as TP rank 1 behind gpu-1 at gpu-1. The `aeon-mtp`
+  half was right in conclusion but wrong in basis: AEON is switched off, but
+  on gpu-1 `aeon-mtp` and `deepseek-v4-flash` both resolved to the SAME
+  DeepSeek-V4-Flash-DSpark weights — so the arms were failing on the dead
+  ADDRESS, not on the model name.
+
+  What actually changed (all three blockers cleared):
+    1. Both arms repointed old-gpu-a -> gpu-1, aeon-mtp -> deepseek-v4-flash.
+    2. `coding-team-v2` (the baseline arm) was copied from ~/.vett/profiles/
+       into this repo's profiles/ — it existed ONLY in the shared, stale,
+       untracked store, so the A/B could not run from a clean checkout.
+    3. The A/B is a real comparison again: both arms hit the same endpoint
+       and the same weights, and differ only in the analyzer MCP wiring —
+       which is the delta this suite exists to measure.
+
+  Still a scoping call for Mark, NOT a repair: whether the
+  no-analyzer/analyzer comparison is still wanted at all. The suite is now
+  runnable; that is a separate question from whether it should be run.
+
+  Tier-2 Python web-framework task suite. Each instance ships a small
+  Django / FastAPI / Flask / pytest project with a specific engineering
+  task the implementer must complete. The suite is designed to be run
+  twice as an A/B: once with `coding-team-v2` (no analyzer) and once
+  with `coding-team-v2-analyzer` (analyzer MCP tools available). Every
+  task is chosen so that the analyzer's Q1-Q7 tools have a clear
+  advantage — locating a URL handler, tracing a return-shape, finding
+  every caller — and the delta between the two profiles is the M5
+  acceptance signal.
+
+  Substitute for the "SWE-Verified 20-instance A/B benchmark" per the
+  Config B M5 gate — same shape (real Python, real pytest verification),
+  fits inside a single tar/checkout instead of the SWE-bench Docker
+  ecosystem, and every instance's ground truth is a passing pytest run.
+
+  Run baseline:
+    vett team-bench team-python-web-tier2 --profile coding-team-v2 --json > baseline.json
+  Run treatment:
+    vett team-bench team-python-web-tier2 --profile coding-team-v2-analyzer --json > treatment.json
+  A/B report:
+    python apps/static-analysis-python/scripts/ab_report.py baseline.json treatment.json
+
+profile: coding-team-v2
+tier: 2
+
+# All instances share the same taxonomy shape — Python web framework,
+# uses pytest for verification, no network I/O, complexity tier 2.
+# Inlined per-instance below (YamlDotNet's suite loader can't resolve
+# YAML anchors declared under an unrecognized top-level key).
+
+instances:
+  # -----------------------------------------------------------------
+  # #1 — Flask: fix a URL pattern typo
+  # Analyzer advantage: q7_flask_endpoints instantly shows which route
+  # is wrong; without it the implementer has to grep for the wrong
+  # pattern.
+  # -----------------------------------------------------------------
+  - id: pw1-flask-url-typo
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Flask app has a URL pattern typo — /helllo instead of /hello.
+      The test hits /hello and expects "world". Fix the route.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask
+
+        app = Flask(__name__)
+
+        @app.route("/helllo")
+        def hello():
+            return "world"
+
+        @app.route("/healthz")
+        def healthz():
+            return "ok"
+      tests/test_app.py: |
+        from app import app
+
+        def test_hello_route():
+            client = app.test_client()
+            r = client.get("/hello")
+            assert r.status_code == 200
+            assert r.data == b"world"
+
+        def test_healthz_still_works():
+            client = app.test_client()
+            assert client.get("/healthz").status_code == 200
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The Flask app has a URL pattern typo. `tests/test_app.py`
+      hits `/hello` but the app registers `/helllo`. Fix `app.py`.
+      Do not change the tests. Both tests must pass.
+
+      Do NOT run pytest yourself; the bench harness verifies.
+    timeout_seconds: 360
+    assertions:
+      - file: app.py
+        exists: true
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #2 — Flask: rename a route handler + every caller
+  # Analyzer advantage: q2_references gives every use site at once.
+  # -----------------------------------------------------------------
+  - id: pw2-flask-rename-handler
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Rename the Flask handler `get_user` to `read_user` — every
+      test that calls it via `url_for('read_user', ...)` currently
+      breaks because the endpoint name is still `get_user`.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask
+
+        app = Flask(__name__)
+
+        @app.route("/users/<int:user_id>")
+        def get_user(user_id: int):
+            return {"id": user_id, "name": f"user{user_id}"}
+      tests/test_app.py: |
+        from flask import url_for
+        from app import app
+
+        def test_read_user_endpoint_exists():
+            with app.test_request_context():
+                url = url_for("read_user", user_id=7)
+                assert url == "/users/7"
+
+        def test_read_user_returns_user():
+            client = app.test_client()
+            r = client.get("/users/7")
+            assert r.status_code == 200
+            assert r.json == {"id": 7, "name": "user7"}
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Rename the Flask handler `get_user` to `read_user` in `app.py`.
+      The tests use `url_for("read_user", ...)` so the endpoint name
+      must be `read_user`. Do not change the tests. Both tests
+      must pass.
+
+      Do NOT run pytest yourself.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #3 — FastAPI: add missing method to existing router
+  # Analyzer advantage: q7_fastapi_endpoints shows the existing route
+  # shape (prefix, tags), so the implementer adds a matching endpoint
+  # without hunting.
+  # -----------------------------------------------------------------
+  - id: pw3-fastapi-add-delete
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Add DELETE /items/{item_id} to the FastAPI app. It should
+      return 204 with no body. The existing GET /items/{item_id}
+      handler is a reference for shape.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        fastapi==0.115.2
+        httpx==0.27.2
+        pytest==8.3.3
+      main.py: |
+        from fastapi import FastAPI
+
+        app = FastAPI()
+
+        _store: dict[int, str] = {1: "a", 2: "b"}
+
+        @app.get("/items/{item_id}")
+        def get_item(item_id: int) -> dict:
+            return {"id": item_id, "value": _store.get(item_id, "")}
+      tests/test_main.py: |
+        from fastapi.testclient import TestClient
+        from main import app
+
+        client = TestClient(app)
+
+        def test_get_still_works():
+            r = client.get("/items/1")
+            assert r.status_code == 200
+            assert r.json()["value"] == "a"
+
+        def test_delete_returns_204():
+            r = client.delete("/items/1")
+            assert r.status_code == 204
+            assert r.content == b""
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Add a DELETE /items/{item_id} handler to `main.py`. It must
+      return 204 with no response body. The existing get_item
+      handler is a shape reference. Do not modify tests. Both
+      tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #4 — FastAPI: fix a Pydantic response shape mismatch
+  # Analyzer advantage: q7_pydantic_fields + q6_provenance shows the
+  # expected shape vs what the handler builds.
+  # -----------------------------------------------------------------
+  - id: pw4-fastapi-pydantic-response-shape
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      FastAPI handler returns dict with `full_name` but the response
+      model declares `display_name`. Fix the handler to build the
+      model's field name.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        fastapi==0.115.2
+        httpx==0.27.2
+        pytest==8.3.3
+        pydantic==2.9.2
+      main.py: |
+        from fastapi import FastAPI
+        from pydantic import BaseModel
+
+        app = FastAPI()
+
+        class UserResponse(BaseModel):
+            id: int
+            display_name: str
+            email: str
+
+        @app.get("/users/{user_id}", response_model=UserResponse)
+        def get_user(user_id: int):
+            # BUG: builds `full_name` but the model expects `display_name`.
+            return {"id": user_id, "full_name": f"user{user_id}", "email": f"u{user_id}@x.com"}
+      tests/test_main.py: |
+        from fastapi.testclient import TestClient
+        from main import app
+
+        client = TestClient(app)
+
+        def test_response_has_display_name():
+            r = client.get("/users/3")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["display_name"] == "user3"
+            assert body["email"] == "u3@x.com"
+            assert "full_name" not in body
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The FastAPI endpoint returns a dict with `full_name` but the
+      response_model UserResponse declares `display_name`. Fix the
+      handler in `main.py` to use `display_name`. Do not change
+      the model or tests.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "1 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #5 — Django-style: add a view + URL pattern
+  # Analyzer advantage: q7_django_endpoints + q1_signature enumerates
+  # the existing convention.
+  # -----------------------------------------------------------------
+  - id: pw5-django-shape-add-endpoint
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Django-shape app (urls + views). Add a `books_list` view + URL
+      pattern that returns JSON list of books. The existing
+      author_list handler is the shape reference.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        django==5.1.2
+        pytest==8.3.3
+        pytest-django==4.9.0
+      settings.py: |
+        SECRET_KEY = "test"
+        DEBUG = True
+        INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.auth"]
+        DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+        ROOT_URLCONF = "urls"
+        USE_TZ = True
+      urls.py: |
+        from django.urls import path
+        from views import author_list
+
+        urlpatterns = [
+            path("authors/", author_list, name="author_list"),
+        ]
+      views.py: |
+        from django.http import JsonResponse
+
+        def author_list(request):
+            return JsonResponse({"authors": ["a1", "a2"]})
+      conftest.py: |
+        import django
+        import os
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+        django.setup()
+      pytest.ini: |
+        [pytest]
+        DJANGO_SETTINGS_MODULE = settings
+      tests/test_views.py: |
+        import json
+        from django.test import RequestFactory
+        from urls import urlpatterns
+        from views import author_list
+
+        def test_author_list_still_works():
+            r = author_list(RequestFactory().get("/authors/"))
+            data = json.loads(r.content)
+            assert data == {"authors": ["a1", "a2"]}
+
+        def test_books_list_view_and_url_added():
+            # Verify a books_list view exists in views module
+            from views import books_list
+            r = books_list(RequestFactory().get("/books/"))
+            data = json.loads(r.content)
+            assert data == {"books": ["b1", "b2"]}
+
+            # Verify URL pattern registered
+            names = {p.name for p in urlpatterns}
+            assert "books_list" in names
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      This is a Django-shape project. Add a `books_list` view to
+      `views.py` that returns `JsonResponse({"books": ["b1","b2"]})`.
+      Then register it in `urls.py` at `path("books/", books_list,
+      name="books_list")`. The existing `author_list` view is the
+      shape reference. Both tests must pass.
+    timeout_seconds: 480
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 240
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #6 — Fix off-by-one in a pure Python function (no framework)
+  # Analyzer advantage: q1_signature + q2_references shows the shape
+  # + callers instantly.
+  # -----------------------------------------------------------------
+  - id: pw6-pagination-off-by-one
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Pagination.page_of computes `[skip:skip+size]` with
+      `skip = page*size`, but page is 1-based so it skips one page
+      too many. Fix.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      pagination.py: |
+        from typing import Sequence, List, TypeVar
+
+        T = TypeVar("T")
+
+        def page_of(source: Sequence[T], page: int, size: int) -> List[T]:
+            """Return the items on the given 1-based page."""
+            if page < 1 or size < 1:
+                raise ValueError("page and size must be positive")
+            skip = page * size  # BUG: should be (page - 1) * size
+            return list(source[skip:skip + size])
+      tests/test_pagination.py: |
+        from pagination import page_of
+
+        def test_page1_returns_first_chunk():
+            assert page_of(list(range(1, 11)), 1, 3) == [1, 2, 3]
+
+        def test_page2_returns_second_chunk():
+            assert page_of(list(range(1, 11)), 2, 3) == [4, 5, 6]
+
+        def test_beyond_end_returns_empty():
+            assert page_of([1, 2, 3, 4, 5], 4, 3) == []
+
+        def test_invalid_page_raises():
+            import pytest
+            with pytest.raises(ValueError):
+                page_of([1, 2, 3], 0, 2)
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Fix the off-by-one in `pagination.page_of`. The method comment
+      says page is 1-based; the current `skip = page * size` skips
+      the first page's items. Change to `(page - 1) * size`. Do not
+      change tests. All 4 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "4 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #7 — Fix a NoneType error before validation
+  # Analyzer advantage: q6_provenance shows that a caller may pass None.
+  # -----------------------------------------------------------------
+  - id: pw7-string-none-handling
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      truncate() dereferences .strip() before the None check, so
+      it throws AttributeError on None. Fix by handling None/empty
+      upfront.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      helpers.py: |
+        def truncate(value: str | None, max_length: int) -> str:
+            """Truncate to max_length; return "" if None or empty."""
+            if max_length < 0:
+                raise ValueError("max_length must be non-negative")
+            # BUG: dereferences .strip() BEFORE None check.
+            trimmed = value.strip()
+            if len(trimmed) <= max_length:
+                return trimmed
+            return trimmed[:max_length]
+      tests/test_helpers.py: |
+        import pytest
+        from helpers import truncate
+
+        def test_none_returns_empty():
+            assert truncate(None, 5) == ""
+
+        def test_empty_returns_empty():
+            assert truncate("", 5) == ""
+
+        def test_longer_truncates():
+            assert truncate("hello world", 5) == "hello"
+
+        def test_shorter_returns_as_is():
+            assert truncate("hi", 10) == "hi"
+
+        def test_negative_raises():
+            with pytest.raises(ValueError):
+                truncate("x", -1)
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Fix truncate() in `helpers.py`: handle None/empty BEFORE
+      dereferencing .strip(). Return "" when value is None or empty.
+      Do not change tests. All 5 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "5 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #8 — Missing validation before persistence
+  # Analyzer advantage: q6_provenance shows the input->response chain.
+  # -----------------------------------------------------------------
+  - id: pw8-flask-add-validation
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Flask /users POST accepts any dict; test expects 400 if email
+      missing. Add validation.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask, request, jsonify
+
+        app = Flask(__name__)
+        _users: list[dict] = []
+
+        @app.post("/users")
+        def create_user():
+            data = request.get_json() or {}
+            _users.append(data)
+            return jsonify({"id": len(_users), **data}), 201
+      tests/test_app.py: |
+        from app import app, _users
+
+        def _reset():
+            _users.clear()
+
+        def test_create_user_ok():
+            _reset()
+            client = app.test_client()
+            r = client.post("/users", json={"name": "Ann", "email": "a@x.com"})
+            assert r.status_code == 201
+            assert r.json["name"] == "Ann"
+
+        def test_missing_email_returns_400():
+            _reset()
+            client = app.test_client()
+            r = client.post("/users", json={"name": "Ann"})
+            assert r.status_code == 400
+
+        def test_missing_name_returns_400():
+            _reset()
+            client = app.test_client()
+            r = client.post("/users", json={"email": "a@x.com"})
+            assert r.status_code == 400
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The Flask POST /users handler needs input validation.
+      When `name` or `email` is missing from the JSON body, return
+      status 400. When both are present, current behavior stays.
+      All 3 tests must pass. Do not change tests.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "3 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 24
+
+  # -----------------------------------------------------------------
+  # #9 — Extend existing class with a new method
+  # Analyzer advantage: q5_file_structure shows the class + docstring
+  # in one shot; q3_implementations shows Protocol conformance targets.
+  # -----------------------------------------------------------------
+  - id: pw9-extend-repo-class
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      UserRepo has find_by_id + list_all. Add find_by_email that
+      returns the first User with matching email, or None.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      user_repo.py: |
+        from dataclasses import dataclass
+
+        @dataclass(frozen=True)
+        class User:
+            id: int
+            email: str
+            name: str
+
+        class UserRepo:
+            def __init__(self, users: list[User]) -> None:
+                self._users = list(users)
+
+            def find_by_id(self, user_id: int) -> User | None:
+                for u in self._users:
+                    if u.id == user_id:
+                        return u
+                return None
+
+            def list_all(self) -> list[User]:
+                return list(self._users)
+      tests/test_user_repo.py: |
+        from user_repo import User, UserRepo
+
+        USERS = [
+            User(1, "a@x.com", "Ann"),
+            User(2, "b@x.com", "Bob"),
+        ]
+
+        def test_find_by_email_hit():
+            repo = UserRepo(USERS)
+            assert repo.find_by_email("b@x.com") == USERS[1]
+
+        def test_find_by_email_miss():
+            repo = UserRepo(USERS)
+            assert repo.find_by_email("nope@x.com") is None
+
+        def test_existing_methods_still_work():
+            repo = UserRepo(USERS)
+            assert repo.find_by_id(1) == USERS[0]
+            assert len(repo.list_all()) == 2
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Add `find_by_email(email: str) -> User | None` to UserRepo in
+      `user_repo.py`. Return the first matching user or None. Do not
+      change tests. All 3 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "3 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #10 — Trace request contract to change response shape
+  # Analyzer advantage: q6_provenance shows the current input->response
+  # provenance chain.
+  # -----------------------------------------------------------------
+  - id: pw10-fastapi-flatten-response
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Current response is `{"data": {"user": {...}}}`; test expects
+      the user dict at the top level (flattened). Change the handler.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        fastapi==0.115.2
+        httpx==0.27.2
+        pytest==8.3.3
+      main.py: |
+        from fastapi import FastAPI
+
+        app = FastAPI()
+
+        @app.get("/user/{user_id}")
+        def read_user(user_id: int):
+            # BUG: nested payload; test expects flat.
+            return {"data": {"user": {"id": user_id, "name": f"u{user_id}"}}}
+      tests/test_main.py: |
+        from fastapi.testclient import TestClient
+        from main import app
+
+        def test_response_is_flat():
+            client = TestClient(app)
+            r = client.get("/user/9")
+            body = r.json()
+            assert body == {"id": 9, "name": "u9"}
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Change read_user in `main.py` to return the user dict at the
+      top level (flat), not nested under `{"data":{"user":...}}`.
+      Do not change tests. Test must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "1 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #11 — Flask: register blueprint under prefix
+  # -----------------------------------------------------------------
+  - id: pw11-flask-blueprint-prefix
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      auth blueprint is defined but not registered on app under
+      /auth prefix. Register it so /auth/login works.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask
+        from auth import bp as auth_bp
+
+        app = Flask(__name__)
+
+        @app.route("/healthz")
+        def healthz():
+            return "ok"
+
+        # TODO: register auth_bp under /auth
+      auth.py: |
+        from flask import Blueprint
+
+        bp = Blueprint("auth", __name__)
+
+        @bp.route("/login")
+        def login():
+            return "login-page"
+      tests/test_app.py: |
+        from app import app
+
+        def test_login_at_auth_prefix():
+            client = app.test_client()
+            r = client.get("/auth/login")
+            assert r.status_code == 200
+            assert r.data == b"login-page"
+
+        def test_healthz_still_works():
+            client = app.test_client()
+            assert client.get("/healthz").status_code == 200
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Register the auth blueprint on `app` in `app.py` under the
+      `/auth` URL prefix so `/auth/login` returns 200. Do not
+      change tests. Both tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #12 — Pydantic model: add missing field
+  # -----------------------------------------------------------------
+  - id: pw12-pydantic-add-field
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      OrderRequest Pydantic model needs a `notes: str | None` field
+      with default None. Tests build it with notes= keyword.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pydantic==2.9.2
+        pytest==8.3.3
+      models.py: |
+        from pydantic import BaseModel
+
+        class OrderRequest(BaseModel):
+            customer_id: int
+            item_ids: list[int]
+      tests/test_models.py: |
+        from models import OrderRequest
+
+        def test_notes_optional_default_none():
+            o = OrderRequest(customer_id=1, item_ids=[10])
+            assert o.notes is None
+
+        def test_notes_accepts_string():
+            o = OrderRequest(customer_id=1, item_ids=[10], notes="rush")
+            assert o.notes == "rush"
+
+        def test_existing_fields_still_work():
+            o = OrderRequest(customer_id=42, item_ids=[1, 2, 3])
+            assert o.customer_id == 42
+            assert o.item_ids == [1, 2, 3]
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Add `notes: str | None = None` field to OrderRequest in
+      `models.py`. Do not change tests. All 3 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "3 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #13 — Wrong HTTP method
+  # -----------------------------------------------------------------
+  - id: pw13-flask-wrong-method
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Flask handler /submit only accepts GET; test posts JSON.
+      Add POST support.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask, request
+
+        app = Flask(__name__)
+
+        @app.route("/submit", methods=["GET"])
+        def submit():
+            data = request.get_json(silent=True) or {}
+            return {"echoed": data.get("value", "")}
+      tests/test_app.py: |
+        from app import app
+
+        def test_post_json_body_echoed():
+            client = app.test_client()
+            r = client.post("/submit", json={"value": "hello"})
+            assert r.status_code == 200
+            assert r.json == {"echoed": "hello"}
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      /submit currently only accepts GET; the test POSTs JSON.
+      Update the route decorator to accept POST too, keeping the
+      handler logic. Test must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "1 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #14 — Missing exception mapping
+  # -----------------------------------------------------------------
+  - id: pw14-fastapi-error-mapping
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      /users/{id} returns 500 on unknown ID (KeyError). Test expects
+      404. Add HTTPException handling.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        fastapi==0.115.2
+        httpx==0.27.2
+        pytest==8.3.3
+      main.py: |
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        _users = {1: {"id": 1, "name": "Ann"}, 2: {"id": 2, "name": "Bob"}}
+
+        @app.get("/users/{user_id}")
+        def read_user(user_id: int):
+            return _users[user_id]  # BUG: KeyError -> 500
+      tests/test_main.py: |
+        from fastapi.testclient import TestClient
+        from main import app
+
+        client = TestClient(app)
+
+        def test_known_user_ok():
+            assert client.get("/users/1").status_code == 200
+
+        def test_unknown_user_returns_404():
+            assert client.get("/users/999").status_code == 404
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      When `/users/{user_id}` is called with an id not in `_users`,
+      raise HTTPException with status_code=404. Keep the happy
+      path unchanged. Both tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #15 — Fix a Protocol implementer to satisfy structural conformance
+  # Analyzer advantage: q3_implementations + q1_signature enumerate
+  # required methods.
+  # -----------------------------------------------------------------
+  - id: pw15-protocol-conformance
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      InMemoryCache is meant to implement Cache protocol but is
+      missing the `delete` method. Add it.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      cache.py: |
+        from typing import Protocol, Any
+
+        class Cache(Protocol):
+            def get(self, key: str) -> Any | None: ...
+            def set(self, key: str, value: Any) -> None: ...
+            def delete(self, key: str) -> None: ...
+
+        class InMemoryCache:
+            def __init__(self) -> None:
+                self._data: dict[str, Any] = {}
+
+            def get(self, key: str) -> Any | None:
+                return self._data.get(key)
+
+            def set(self, key: str, value: Any) -> None:
+                self._data[key] = value
+      tests/test_cache.py: |
+        from cache import Cache, InMemoryCache
+
+        def _use(cache: Cache) -> None:
+            cache.set("a", 1)
+            cache.delete("a")
+            assert cache.get("a") is None
+
+        def test_delete_removes_entry():
+            c = InMemoryCache()
+            _use(c)
+
+        def test_get_and_set_still_work():
+            c = InMemoryCache()
+            c.set("x", 42)
+            assert c.get("x") == 42
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Add a `delete(self, key: str) -> None` method to InMemoryCache
+      that removes the key (no-op if missing). Both tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #16 — Consolidate duplicate handler logic
+  # -----------------------------------------------------------------
+  - id: pw16-flask-add-second-route
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Add /v2/ping alongside existing /v1/ping using the same
+      handler. Both routes return "pong".
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask
+
+        app = Flask(__name__)
+
+        @app.route("/v1/ping")
+        def ping():
+            return "pong"
+      tests/test_app.py: |
+        from app import app
+
+        def test_v1_ping():
+            client = app.test_client()
+            assert client.get("/v1/ping").data == b"pong"
+
+        def test_v2_ping():
+            client = app.test_client()
+            r = client.get("/v2/ping")
+            assert r.status_code == 200
+            assert r.data == b"pong"
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Register /v2/ping as an alias for /v1/ping — same handler,
+      same body. You can add a second @app.route decorator or use
+      add_url_rule. Both tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "2 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #17 — Refactor: extract helper method
+  # -----------------------------------------------------------------
+  - id: pw17-extract-helper
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      OrderService.calc_total duplicates tax calculation. Extract
+      _calc_tax(subtotal) and use it. Callers unchanged.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      orders.py: |
+        class OrderService:
+            TAX_RATE = 0.08
+
+            def calc_total(self, prices: list[float]) -> float:
+                subtotal = sum(prices)
+                tax = subtotal * self.TAX_RATE
+                return round(subtotal + tax, 2)
+
+            def calc_totals(self, groups: list[list[float]]) -> list[float]:
+                totals = []
+                for group in groups:
+                    subtotal = sum(group)
+                    tax = subtotal * self.TAX_RATE
+                    totals.append(round(subtotal + tax, 2))
+                return totals
+      tests/test_orders.py: |
+        from orders import OrderService
+
+        def test_total_single_group():
+            s = OrderService()
+            assert s.calc_total([100.0]) == 108.0
+
+        def test_totals_multiple_groups():
+            s = OrderService()
+            assert s.calc_totals([[100.0], [50.0]]) == [108.0, 54.0]
+
+        def test_calc_tax_helper_exists():
+            s = OrderService()
+            assert hasattr(s, "_calc_tax")
+            assert s._calc_tax(100.0) == 8.0
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Extract a `_calc_tax(self, subtotal: float) -> float` helper
+      on OrderService that returns `subtotal * self.TAX_RATE`. Use
+      it in both calc_total and calc_totals in place of the inline
+      multiplication. All 3 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "3 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #18 — FastAPI: fix Path parameter parsing
+  # -----------------------------------------------------------------
+  - id: pw18-fastapi-path-parsing
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Path parameter is typed as int but the handler treats it as
+      str via extra str() conversion; fix so the return uses the
+      integer id (no str() wrapper).
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        fastapi==0.115.2
+        httpx==0.27.2
+        pytest==8.3.3
+      main.py: |
+        from fastapi import FastAPI
+
+        app = FastAPI()
+
+        @app.get("/items/{item_id}")
+        def read_item(item_id: int):
+            # BUG: casts the parsed int back to str.
+            return {"id": str(item_id)}
+      tests/test_main.py: |
+        from fastapi.testclient import TestClient
+        from main import app
+
+        def test_id_is_int():
+            r = TestClient(app).get("/items/42")
+            assert r.json() == {"id": 42}
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Fix read_item in `main.py` so the returned id is the integer,
+      not a string. Do not change the type annotation. Test must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "1 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #19 — Refactor: add a base class and inherit
+  # -----------------------------------------------------------------
+  - id: pw19-inheritance-add-base
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      DogRepo + CatRepo duplicate CRUD. Create AnimalRepo base
+      class with add/get; have both concrete classes inherit.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        pytest==8.3.3
+      repos.py: |
+        class DogRepo:
+            def __init__(self) -> None:
+                self._d: dict[int, str] = {}
+
+            def add(self, key: int, value: str) -> None:
+                self._d[key] = value
+
+            def get(self, key: int) -> str | None:
+                return self._d.get(key)
+
+        class CatRepo:
+            def __init__(self) -> None:
+                self._d: dict[int, str] = {}
+
+            def add(self, key: int, value: str) -> None:
+                self._d[key] = value
+
+            def get(self, key: int) -> str | None:
+                return self._d.get(key)
+      tests/test_repos.py: |
+        from repos import DogRepo, CatRepo, AnimalRepo
+
+        def test_dog_inherits_from_animalrepo():
+            assert issubclass(DogRepo, AnimalRepo)
+
+        def test_cat_inherits_from_animalrepo():
+            assert issubclass(CatRepo, AnimalRepo)
+
+        def test_dog_add_get():
+            d = DogRepo()
+            d.add(1, "Rex")
+            assert d.get(1) == "Rex"
+
+        def test_cat_add_get():
+            c = CatRepo()
+            c.add(2, "Whiskers")
+            assert c.get(2) == "Whiskers"
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Add an `AnimalRepo` base class in `repos.py` that provides
+      __init__, add, and get. Have DogRepo and CatRepo inherit from
+      it and drop their duplicate implementations. All 4 tests must
+      pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 120
+          exit_code: 0
+          stdout_matches: "4 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 20
+
+  # -----------------------------------------------------------------
+  # #20 — Q6 provenance test: response leaf that must stay deterministic
+  # -----------------------------------------------------------------
+  - id: pw20-deterministic-response
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      /version endpoint returns hardcoded "1.0" but test wants it to
+      read from `VERSION` module-level constant. Deterministic input,
+      no I/O.
+    workspace: empty-git-repo
+    seed_files:
+      requirements.txt: |
+        flask==3.0.3
+        pytest==8.3.3
+      app.py: |
+        from flask import Flask
+
+        VERSION = "1.4.2"
+
+        app = Flask(__name__)
+
+        @app.get("/version")
+        def version():
+            return {"version": "1.0"}  # BUG: hardcoded, should use VERSION
+      tests/test_app.py: |
+        from app import app, VERSION
+
+        def test_version_from_constant():
+            client = app.test_client()
+            r = client.get("/version")
+            assert r.status_code == 200
+            assert r.json == {"version": VERSION}
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      Change `/version` in `app.py` to return the VERSION module
+      constant instead of the hardcoded "1.0" string. Test must pass.
+    timeout_seconds: 360
+    assertions:
+      - run_command:
+          command: "python -m pip install -q -r requirements.txt && python -m pytest tests/ -q"
+          cwd: "."
+          timeout_seconds: 180
+          exit_code: 0
+          stdout_matches: "1 passed"
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 20

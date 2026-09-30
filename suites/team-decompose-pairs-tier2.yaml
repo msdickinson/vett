@@ -1,0 +1,263 @@
+name: team-decompose-pairs-tier2
+description: |
+  Q3 — decomposition benchmark. Each "D-pair" is one monolithic
+  instance + N decomposed sub-instances. The decomposition
+  orchestrator (`scripts/bench-decompose.py`) runs both
+  against fresh workspaces (`--workspace-dir` for the decomposed
+  chain) and compares pass rates.
+
+  The LAST decomposed step's assertions must match what the
+  monolithic step asserts — that way both arms are graded on the
+  same end-state.
+
+  Run via: python scripts/bench-decompose.py decompose-pairs/D1.yaml
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # D1 — Checkout context
+  # Monolith (A7 ~70%): build whole checkout flow in one shot
+  # Decomposed: A5 Money → A5 Order → A6 Checkout
+  # ============================================================
+  - id: D1-monolith-checkout
+    taxonomy: &complex_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A7 — Build full checkout: Money VO + Order aggregate + Checkout
+      service in one shot.
+    workspace: empty-git-repo
+    seed_files:
+      Checkout.csproj: &checkout_csproj |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Checkout</RootNamespace>
+            <AssemblyName>Checkout</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Checkout_Tests.cs: &checkout_tests |
+        namespace Checkout;
+
+        public class Checkout_Tests
+        {
+            [Fact]
+            public void Money_Add_SameCurrency()
+            {
+                var sum = new Money(10m, "USD").Add(new Money(5m, "USD"));
+                Assert.Equal(15m, sum.Amount);
+                Assert.Equal("USD", sum.Currency);
+            }
+
+            [Fact]
+            public void Money_Add_DifferentCurrency_Throws()
+            {
+                Assert.ThrowsAny<Exception>(
+                    () => new Money(10m, "USD").Add(new Money(5m, "EUR")));
+            }
+
+            [Fact]
+            public void Order_AddLine_TracksItem()
+            {
+                var o = new Order("USD");
+                o.AddLine("apple", 2, new Money(3m, "USD"));
+                Assert.Equal(new Money(6m, "USD"), o.Subtotal);
+            }
+
+            [Fact]
+            public void Order_AddLine_DifferentCurrency_Throws()
+            {
+                var o = new Order("USD");
+                Assert.ThrowsAny<Exception>(
+                    () => o.AddLine("a", 1, new Money(5m, "EUR")));
+            }
+
+            [Fact]
+            public void Checkout_EmptyOrder_Throws()
+            {
+                var c = new CheckoutService();
+                Assert.ThrowsAny<Exception>(() => c.Place(new Order("USD")));
+            }
+
+            [Fact]
+            public void Checkout_PlacesOrder()
+            {
+                var o = new Order("USD");
+                o.AddLine("apple", 2, new Money(3m, "USD"));
+                var c = new CheckoutService();
+                var receipt = c.Place(o);
+                Assert.Equal(new Money(6m, "USD"), receipt.Total);
+            }
+        }
+    prompt: |
+      Build a complete checkout context in the workspace root. Three
+      public classes, all in the `Checkout` namespace:
+
+        1. `Money` — value object with decimal Amount + string Currency.
+           Methods: `Add(Money)` / `Subtract(Money)` that THROW on
+           currency mismatch. Override Equals + GetHashCode by value.
+
+        2. `Order` — aggregate root. Constructor takes a currency
+           (string). Method `AddLine(string product, int qty, Money
+           unitPrice)` that throws on currency mismatch with the
+           order. Property `Subtotal` returning a Money.
+
+        3. `CheckoutService` — has `Place(Order order)` that throws on
+           empty order, otherwise returns a `Receipt` record with a
+           Total Money property.
+
+      Dispatch an implementer to write all three classes in one go.
+      Then accept_dispatch.
+
+      The seeded `Checkout_Tests.cs` has 6 tests; all must pass after
+      your work. DO NOT modify the test file. DO NOT run dotnet test
+      yourself — the harness verifies.
+    timeout_seconds: 540
+    assertions: &checkout_assertions
+      - file: Money.cs
+        exists: true
+      - file: Order.cs
+        exists: true
+      - file: CheckoutService.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 6
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 25
+          leader_iters_max: 16
+
+  - id: D1-step1-money
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A5 — Money VO only
+    workspace: empty-git-repo
+    seed_files:
+      Checkout.csproj: *checkout_csproj
+      Checkout_Tests.cs: *checkout_tests
+    prompt: |
+      Dispatch an implementer to create ONLY `Money.cs` in the workspace
+      root. Public class `Money` in the `Checkout` namespace, with:
+        - `public decimal Amount { get; }` and `public string Currency { get; }`
+        - constructor `Money(decimal amount, string currency)`
+        - `Money Add(Money other)` and `Money Subtract(Money other)`,
+          BOTH throw on currency mismatch
+        - value-equality overrides for Equals + GetHashCode
+
+      Do NOT create Order.cs or CheckoutService.cs — the next step
+      will handle those. Accept_dispatch when the implementer finishes.
+    timeout_seconds: 360
+    assertions:
+      - file: Money.cs
+        exists: true
+      - file: Money.cs
+        content_matches: 'class\s+Money'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 8
+
+  - id: D1-step2-order
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A5 — Order aggregate (depends on Money from step 1)
+    workspace: empty-git-repo
+    # NOTE: When invoked via --workspace-dir these seed_files are
+    # IGNORED. The orchestrator chains steps against the same dir, so
+    # Money.cs from step 1 + the .csproj/tests from step 1's seed will
+    # already be present. seed_files here are only for solo invocation
+    # in case someone wants to run this step standalone.
+    seed_files:
+      Checkout.csproj: *checkout_csproj
+      Checkout_Tests.cs: *checkout_tests
+    prompt: |
+      `Money.cs` already exists in the workspace (created in a prior
+      step). Dispatch an implementer to create ONLY `Order.cs` in the
+      workspace root. Public class `Order` in the `Checkout` namespace,
+      with:
+        - constructor `Order(string currency)`
+        - method `void AddLine(string product, int qty, Money unitPrice)`
+          that throws if the unitPrice's currency != the order's
+          currency
+        - property `Money Subtotal` returning the sum of qty * unitPrice
+          across all lines (in the order's currency)
+
+      Do NOT create or modify CheckoutService.cs — the next step will
+      handle that. Reference the existing Money class. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: Order.cs
+        exists: true
+      - file: Order.cs
+        content_matches: 'class\s+Order'
+      - file: Money.cs
+        exists: true
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 8
+
+  - id: D1-step3-checkout
+    taxonomy: *complex_tax
+    description: A6 — CheckoutService + final-state assertions (mirrors monolith)
+    workspace: empty-git-repo
+    # As above — these seed files are for solo invocation only;
+    # chained orchestrator skips them.
+    seed_files:
+      Checkout.csproj: *checkout_csproj
+      Checkout_Tests.cs: *checkout_tests
+    prompt: |
+      `Money.cs` and `Order.cs` already exist in the workspace.
+      Dispatch an implementer to create `CheckoutService.cs` in the
+      workspace root. Public class `CheckoutService` in the `Checkout`
+      namespace, with:
+        - method `Place(Order order)` that throws if the order has no
+          lines (Subtotal of zero), otherwise returns a Receipt
+        - a public `Receipt` record (can be in the same file) with a
+          single `Money Total` property
+
+      Reference the existing Money and Order classes. Accept_dispatch.
+    timeout_seconds: 540
+    # Same end-state assertions as the monolith. Grading parity is the
+    # point of the comparison.
+    assertions: *checkout_assertions

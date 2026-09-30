@@ -1,0 +1,16 @@
+name: swe-bench-verified
+description: |
+  SWE-bench Verified — 500 instances from the Princeton NLP dataset.
+  Each instance is a real GitHub issue with a known fix. The agent
+  must read the codebase, understand the bug, and produce a patch.
+
+loader:
+  type: jsonl
+  path: ~/.cache/vett/datasets/swe-bench-verified.jsonl
+
+rendering:
+  working_dir: /testbed
+  docker_image_template: "swebench/sweb.eval.x86_64.{repo}_1776_{instance}"
+
+sandbox:
+  docker_image: ""

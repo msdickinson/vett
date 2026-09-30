@@ -1,0 +1,258 @@
+name: team-chain-calculator-monolithic
+description: |
+  Q3 monolithic head-to-head for the chain-calculator experiment.
+
+  Same end-state as `team-chain-calculator` (10 progressive steps) but
+  delivered as ONE task: implement the full Calculator class with all
+  10 capabilities at once, against all test files seeded up front.
+
+  This pair lets us answer: "does decomposition into 10 steps help,
+  hurt, or wash, vs a single comprehensive task?"
+
+  Run: vett team-bench team-chain-calculator-monolithic
+
+profile: ds-team-flash
+tier: 4
+
+instances:
+  - id: mono-calculator
+    taxonomy:
+      # file_count_bucket counts files the task is EXPECTED TO TOUCH
+      # (defaults/taxonomy.yaml). This instance seeds Calculator.csproj
+      # plus nine Step*_Tests.cs and asks for ONE file: the assertions
+      # target Calculator.cs alone. Was "10+" — a value that has never
+      # existed in the schema, and which counted the ten FEATURES (or
+      # the ten seeded files) rather than the one file written.
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "4"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Monolithic: build the full 10-feature Calculator in one task.
+    workspace: empty-git-repo
+    seed_files:
+      Calculator.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Calc</RootNamespace>
+            <AssemblyName>Calc</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Step1_Tests.cs: |
+        namespace Calc;
+        public class Step1_Tests
+        {
+            [Fact] public void Add_Two_Positives() => Assert.Equal(5, new Calculator().Add(2, 3));
+            [Fact] public void Add_With_Zero()    => Assert.Equal(7, new Calculator().Add(7, 0));
+            [Fact] public void Add_With_Negative() => Assert.Equal(-1, new Calculator().Add(2, -3));
+        }
+      Step2_Tests.cs: |
+        namespace Calc;
+        public class Step2_Tests
+        {
+            [Fact] public void Subtract_Two_Positives() => Assert.Equal(-1, new Calculator().Subtract(2, 3));
+            [Fact] public void Subtract_With_Zero()     => Assert.Equal(7, new Calculator().Subtract(7, 0));
+            [Fact] public void Subtract_With_Negative() => Assert.Equal(5, new Calculator().Subtract(2, -3));
+        }
+      Step3_Tests.cs: |
+        namespace Calc;
+        public class Step3_Tests
+        {
+            [Fact] public void Multiply_Two_Positives() => Assert.Equal(6, new Calculator().Multiply(2, 3));
+            [Fact] public void Multiply_With_Zero()     => Assert.Equal(0, new Calculator().Multiply(7, 0));
+            [Fact] public void Multiply_With_Negative() => Assert.Equal(-6, new Calculator().Multiply(2, -3));
+        }
+      Step4_Tests.cs: |
+        namespace Calc;
+        public class Step4_Tests
+        {
+            [Fact] public void Divide_Two_Positives()  => Assert.Equal(2, new Calculator().Divide(6, 3));
+            [Fact] public void Divide_With_Negative()  => Assert.Equal(-3, new Calculator().Divide(-9, 3));
+            [Fact] public void Divide_Truncates()      => Assert.Equal(1, new Calculator().Divide(7, 4));
+            [Fact] public void Divide_By_Zero_Throws() =>
+                Assert.Throws<DivideByZeroException>(() => new Calculator().Divide(5, 0));
+        }
+      Step5_Tests.cs: |
+        namespace Calc;
+        public class Step5_Tests
+        {
+            [Fact] public void Power_BaseZero()     => Assert.Equal(1, new Calculator().Power(2, 0));
+            [Fact] public void Power_BasePositive() => Assert.Equal(8, new Calculator().Power(2, 3));
+            [Fact] public void Power_BaseOne()      => Assert.Equal(1, new Calculator().Power(1, 100));
+            [Fact] public void Power_BaseLarge()    => Assert.Equal(1024, new Calculator().Power(2, 10));
+        }
+      Step6_Tests.cs: |
+        namespace Calc;
+        public class Step6_Tests
+        {
+            [Fact] public void LastResult_DefaultsZero() => Assert.Equal(0, new Calculator().LastResult);
+            [Fact] public void LastResult_AfterAdd()
+            {
+                var c = new Calculator();
+                c.Add(2, 3);
+                Assert.Equal(5, c.LastResult);
+            }
+            [Fact] public void LastResult_AfterFailedDivide_Unchanged()
+            {
+                var c = new Calculator();
+                c.Add(1, 2);
+                try { c.Divide(5, 0); } catch (DivideByZeroException) { }
+                Assert.Equal(3, c.LastResult);
+            }
+            [Fact] public void LastResult_AfterPower()
+            {
+                var c = new Calculator();
+                c.Power(2, 5);
+                Assert.Equal(32, c.LastResult);
+            }
+        }
+      Step7_Tests.cs: |
+        namespace Calc;
+        public class Step7_Tests
+        {
+            [Fact] public void Clear_ResetsLastResult()
+            {
+                var c = new Calculator();
+                c.Add(2, 3);
+                c.Clear();
+                Assert.Equal(0, c.LastResult);
+            }
+            [Fact] public void Clear_OnFresh_NoOp()
+            {
+                var c = new Calculator();
+                c.Clear();
+                Assert.Equal(0, c.LastResult);
+            }
+            [Fact] public void After_Clear_NewOpUpdatesLastResult()
+            {
+                var c = new Calculator();
+                c.Add(1, 1);
+                c.Clear();
+                c.Multiply(3, 4);
+                Assert.Equal(12, c.LastResult);
+            }
+        }
+      Step8_Tests.cs: |
+        namespace Calc;
+        public class Step8_Tests
+        {
+            [Fact] public void History_DefaultsEmpty() => Assert.Empty(new Calculator().History);
+            [Fact] public void History_AfterAdd_HasOne()
+            {
+                var c = new Calculator();
+                c.Add(2, 3);
+                Assert.Single(c.History);
+                Assert.Equal("Add(2,3)=5", c.History[0]);
+            }
+            [Fact] public void History_FailedDivide_NotRecorded()
+            {
+                var c = new Calculator();
+                c.Add(1, 1);
+                try { c.Divide(2, 0); } catch (DivideByZeroException) { }
+                Assert.Single(c.History);
+            }
+            [Fact] public void History_ClearedByClear()
+            {
+                var c = new Calculator();
+                c.Add(1, 2);
+                c.Multiply(3, 4);
+                c.Clear();
+                Assert.Empty(c.History);
+            }
+        }
+      Step9_Tests.cs: |
+        namespace Calc;
+        public class Step9_Tests
+        {
+            [Fact] public void UndoLast_OnEmpty_NoOp()
+            {
+                var c = new Calculator();
+                c.UndoLast();
+                Assert.Empty(c.History);
+                Assert.Equal(0, c.LastResult);
+            }
+            [Fact] public void UndoLast_OneOp_BackToEmpty()
+            {
+                var c = new Calculator();
+                c.Add(2, 3);
+                c.UndoLast();
+                Assert.Empty(c.History);
+                Assert.Equal(0, c.LastResult);
+            }
+            [Fact] public void UndoLast_TwoOps_LastResultIsPrior()
+            {
+                var c = new Calculator();
+                c.Add(2, 3);
+                c.Multiply(4, 5);
+                c.UndoLast();
+                Assert.Single(c.History);
+                Assert.Equal(5, c.LastResult);
+            }
+            [Fact] public void UndoLast_AfterFailedDivide_StillUndoesLastSuccess()
+            {
+                var c = new Calculator();
+                c.Add(1, 1);
+                c.Multiply(2, 3);
+                try { c.Divide(7, 0); } catch (DivideByZeroException) { }
+                c.UndoLast();
+                Assert.Single(c.History);
+                Assert.Equal(2, c.LastResult);
+            }
+        }
+    prompt: |
+      Build a `Calculator` class (`Calculator.cs`, namespace `Calc`)
+      that satisfies ALL the test files seeded in this workspace
+      (Step1_Tests through Step9_Tests). All tests must pass.
+
+      Required surface (deduced from the tests):
+        - `int Add(int a, int b)`, `int Subtract(int a, int b)`,
+          `int Multiply(int a, int b)`, `int Divide(int a, int b)`
+          (throws DivideByZeroException on b==0),
+          `int Power(int base, int exp)` (exp >= 0, loop-based)
+        - `int LastResult { get; }` — defaults 0, updated on every
+          successful op. Failed Divide does NOT update.
+        - `Clear()` — resets LastResult to 0 AND empties History
+        - `IReadOnlyList<string> History` — every successful op
+          appends `"{Op}({a},{b})={result}"`
+        - `UndoLast()` — removes last History entry; restores
+          LastResult to the previous History entry's result (parse
+          it out) or 0 if History is now empty. No-op on empty.
+        - Internally, extract result-recording into a private helper
+          to avoid duplication.
+
+      Dispatch one implementer. Accept_dispatch.
+    timeout_seconds: 1200
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 600
+          min_passed: 32
+          max_failed: 0
+      - file: Calculator.cs
+        exists: true
+      - file: Calculator.cs
+        content_matches: 'UndoLast'
+      - file: Calculator.cs
+        content_matches: 'LastResult'
+      - file: Calculator.cs
+        content_matches: 'History'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 80
+          leader_iters_max: 30

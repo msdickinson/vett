@@ -1,0 +1,53 @@
+# Build outputs (root + nested)
+**/bin/Debug/
+**/bin/Release/
+bin/nupkg/
+**/obj/
+*.user
+*.suo
+*.userosscache
+
+# Sidecar binaries are built, never committed (sidecar/Makefile sidecar-all)
+bin/vett-sidecar-*
+sidecar/sidecar
+sidecar/sidecar-windows
+sidecar/sidecar.exe
+sidecar/.go-cache/
+
+# Run outputs
+runs/
+out/
+output/
+**/instances/
+trajectory*/
+events*.jsonl
+
+# IDE
+.vs/
+.idea/
+.vscode/launch.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.local.yaml
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+diag/*.log
+diag/*.json
+
+# 2026-08-25 -- team-bench run artifacts (json summaries, stderr logs).
+# Run OUTPUT, not run CONFIG: regenerated on every bench invocation and
+# specific to one host/endpoint/date, so committing them would put stale
+# numbers next to live code.
+#
+scratchpad/
+
+# Editor language-server caches
+*.lscache

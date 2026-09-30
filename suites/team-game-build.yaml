@@ -1,0 +1,303 @@
+name: team-game-build
+description: |
+  AUTONOMOUS SMALL-PROJECT BUILD -- can VETT build a working game on its own?
+
+  Mark, 2026-08-29: "vett chat with the old version struggled to do a basic
+  project ... I need to prove this thing act works. my harness is likey still
+  somewhat buggy is my guess."
+
+  Reference target: games/jean-grey-life -- vanilla-JS, no-build, no-dependency
+  browser life sim. Chosen because it removes every failure mode that is NOT
+  the agent's fault (no npm, no bundler, no framework, no network), so a
+  failure here is a real agent or harness failure.
+
+  TWO ARMS, deliberately not pooled:
+    contract -- ticket + a seeded verify.js the build must satisfy.
+    free     -- prose ticket only. Reproduces what Mark hit.
+  Comparing them answers whether the gap is CAPABILITY or SPECIFICATION.
+
+  THE VERIFIER IS PRE-PROVEN IN BOTH DIRECTIONS (2026-08-29), because a grader
+  that can pass vacuously measures nothing, and one that demands the impossible
+  measures the author rather than the model:
+      empty workspace          -> VERIFY FAIL 0/1
+      reference implementation -> VERIFY PASS 34/34
+  The reference lives in scratchpad/gamebench/reference/ and is NEVER seeded.
+
+  NOTE ON `prompt:` vs `description:` -- the first cut of this suite put the
+  ticket in `description:`, which is documentation only. The leader received no
+  task, replied "I'm ready to work. What task needs to be done?", and the run
+  was scored as a model FAIL in 2 iterations. The task text MUST live in
+  `prompt:`.
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  - id: deepfield-contract
+    taxonomy: &gametax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "yes"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Contract arm: build the game against a seeded, pre-proven verify.js.
+    workspace: empty-git-repo
+    timeout_seconds: 2400
+    prompt: |
+      Build a small browser game called DEEP FIELD: a life simulator about the sole
+      caretaker of an orbital greenhouse.
+
+      It is plain HTML + JavaScript. No build step, no bundler, no npm, no
+      dependencies, no network calls. Opening index.html in a browser must play.
+
+      GAMEPLAY
+      The player keeps one person alive and the garden blooming, one action at a
+      time. There are six 0-100 stats: hunger, energy, hygiene, social, mood, and
+      bloom (the health of the greenhouse itself). Every action takes one phase of
+      the day; the day runs Morning -> Afternoon -> Evening -> Night and then rolls
+      over to the next day. Stats drift down as time passes, so the player is always
+      trading one need against another. There are at least six locations, each
+      offering its own actions -- you cannot shower in the galley. If hunger or
+      energy bottoms out, the run ends; let bloom hit zero and the garden dies.
+      Reaching an ending is a normal outcome, not a crash.
+
+      REQUIRED PUBLIC API. A verify.js already sits in the workspace and tests
+      exactly this, so match it precisely:
+
+        game-core.js must work BOTH in a browser (as a <script> tag) and under
+        node's require(). Export { createGame }.
+
+        createGame(seed)  -> game    seed is a number; the SAME seed must produce the
+                                     SAME run, and different seeds must differ. Use
+                                     your own seeded RNG -- Math.random() will fail.
+        game.state        -> { day, phase, location, stats:{hunger, energy, hygiene,
+                               social, mood, bloom}, ... }
+                               day starts at 1; phase is one of the four names above;
+                               every stat stays within 0..100 at all times.
+        game.locations()  -> array of at least 4, each with an id and a label
+        game.actions()    -> array for the CURRENT location, each {id, label},
+                               optionally enabled:false when unavailable
+        game.act(id)      -> performs it, advances one phase, returns {log}
+        game.move(locId)  -> changes location
+        game.isOver()     -> boolean
+        game.ending()     -> a closing line once the run is over
+
+      index.html must load game-core.js and render the game: the stats, where you
+      are, what just happened, and a button per available action.
+
+      Make it feel like somewhere. Write real prose for the locations and the action
+      results -- varied lines, not one static string per action. The writing is part
+      of the job.
+
+      HOW TO WORK
+      Read verify.js first; it is the acceptance test. Dispatch implementers to write
+      the code, then accept_dispatch to take their work. Run `node verify.js` in the
+      workspace and keep fixing until it prints VERIFY PASS. Do not declare the job
+      done before it does.
+    seed_files:
+      verify.js: |
+        // verify.js -- behavioural acceptance test for the Deep Field life sim.
+        //
+        // THIS FILE IS THE CONTRACT. It is deliberately written against the PUBLIC API
+        // named in the ticket and nothing else: it never reads a private field, never
+        // assumes a file layout beyond game-core.js, and never checks a string the
+        // ticket did not require. An implementation is free to organise itself however
+        // it likes as long as these behaviours hold.
+        //
+        // Run: node verify.js
+        // Exit 0 and print "VERIFY PASS n/n" on success.
+        const path = require('path');
+        let failures = [], checks = 0;
+        function ok(name, cond, detail) {
+          checks++;
+          if (!cond) failures.push(name + (detail ? ' -- ' + detail : ''));
+        }
+        function section(n) { process.stdout.write('\n[' + n + ']\n'); }
+
+        let mod;
+        try {
+          mod = require(path.join(process.cwd(), 'game-core.js'));
+        } catch (e) {
+          console.log('FATAL: cannot require ./game-core.js -- ' + e.message);
+          console.log('VERIFY FAIL 0/1');
+          process.exit(1);
+        }
+        const createGame = mod.createGame || (mod.default && mod.default.createGame);
+        ok('exports createGame', typeof createGame === 'function');
+        if (typeof createGame !== 'function') {
+          console.log('FATAL: game-core.js does not export createGame');
+          console.log('VERIFY FAIL 0/1');
+          process.exit(1);
+        }
+
+        section('1. shape');
+        const g = createGame(12345);
+        ok('state is an object', g && typeof g.state === 'object');
+        const STATS = ['hunger', 'energy', 'hygiene', 'social', 'mood', 'bloom'];
+        for (const s of STATS) {
+          ok('stat ' + s + ' exists and is a number', typeof g.state.stats[s] === 'number');
+          ok('stat ' + s + ' starts in 0..100', g.state.stats[s] >= 0 && g.state.stats[s] <= 100);
+        }
+        ok('day starts at 1', g.state.day === 1);
+        ok('phase is one of the four', ['Morning','Afternoon','Evening','Night'].includes(g.state.phase));
+        ok('has a location', typeof g.state.location === 'string' && g.state.location.length > 0);
+        ok('actions() returns a non-empty array', Array.isArray(g.actions()) && g.actions().length > 0);
+        ok('actions have id and label', g.actions().every(a => typeof a.id === 'string' && typeof a.label === 'string'));
+        ok('locations() returns >= 4 locations', Array.isArray(g.locations()) && g.locations().length >= 4);
+
+        section('2. determinism -- same seed, same run');
+        function trace(seed, n) {
+          const gg = createGame(seed); const out = [];
+          for (let i = 0; i < n && !gg.isOver(); i++) {
+            const acts = gg.actions().filter(a => a.enabled !== false);
+            if (!acts.length) break;
+            const pick = acts[i % acts.length];
+            gg.act(pick.id);
+            out.push(gg.state.day + ':' + gg.state.phase + ':' + pick.id + ':' +
+                     STATS.map(s => gg.state.stats[s]).join(','));
+          }
+          return out.join('|');
+        }
+        const a1 = trace(999, 40), a2 = trace(999, 40), b1 = trace(1000, 40);
+        ok('same seed produces identical trace', a1 === a2);
+        ok('different seed produces a different trace', a1 !== b1, 'seeded RNG appears to be ignored');
+
+        section('3. time advances');
+        const g3 = createGame(7);
+        const seen = new Set(); let lastDay = g3.state.day;
+        for (let i = 0; i < 8 && !g3.isOver(); i++) {
+          seen.add(g3.state.phase);
+          const acts = g3.actions().filter(a => a.enabled !== false);
+          if (!acts.length) break;
+          g3.act(acts[0].id);
+        }
+        ok('cycles through multiple phases', seen.size >= 3, 'saw only: ' + [...seen].join(','));
+        ok('day advances after a full cycle', g3.state.day > lastDay, 'day stuck at ' + g3.state.day);
+
+        section('4. actions actually change state');
+        const g4 = createGame(42);
+        let changed = false;
+        for (let i = 0; i < 6 && !g4.isOver(); i++) {
+          const before = STATS.map(s => g4.state.stats[s]).join(',');
+          const acts = g4.actions().filter(a => a.enabled !== false);
+          if (!acts.length) break;
+          g4.act(acts[0].id);
+          if (STATS.map(s => g4.state.stats[s]).join(',') !== before) changed = true;
+        }
+        ok('at least one action changed a stat', changed);
+        ok('stats stay clamped to 0..100', (() => {
+          const gg = createGame(3);
+          for (let i = 0; i < 200 && !gg.isOver(); i++) {
+            const acts = gg.actions().filter(a => a.enabled !== false);
+            if (!acts.length) break;
+            gg.act(acts[i % acts.length].id);
+            for (const s of STATS) if (gg.state.stats[s] < 0 || gg.state.stats[s] > 100) return false;
+          }
+          return true;
+        })(), 'a stat escaped the 0..100 range');
+
+        section('5. movement');
+        const g5 = createGame(11);
+        const locs = g5.locations().map(l => (typeof l === 'string' ? l : l.id));
+        const dest = locs.find(l => l !== g5.state.location);
+        ok('locations expose usable ids', typeof dest === 'string' && dest.length > 0);
+        if (dest) { g5.move(dest); ok('move() changes location', g5.state.location === dest); }
+        ok('action list is location-dependent', (() => {
+          const gg = createGame(5);
+          const first = gg.actions().map(a => a.id).sort().join(',');
+          for (const l of gg.locations().map(x => (typeof x === 'string' ? x : x.id))) {
+            if (l === gg.state.location) continue;
+            gg.move(l);
+            if (gg.actions().map(a => a.id).sort().join(',') !== first) return true;
+          }
+          return false;
+        })(), 'every location offers the identical action list');
+
+        section('6. the game can end');
+        ok('isOver() is a function', typeof g.isOver === 'function');
+        ok('a neglected run reaches an ending', (() => {
+          const gg = createGame(77);
+          for (let i = 0; i < 400; i++) {
+            if (gg.isOver()) return true;
+            const acts = gg.actions().filter(a => a.enabled !== false);
+            if (!acts.length) return true;
+            // always pick the action that does the least good: idle if offered
+            const idle = acts.find(a => /wait|idle|rest|stare|nothing/i.test(a.id + a.label));
+            gg.act((idle || acts[acts.length - 1]).id);
+          }
+          return false;
+        })(), 'ran 400 turns of neglect without ever ending');
+
+        section('7. the browser build is wired');
+        const fs = require('fs');
+        ok('index.html exists', fs.existsSync('index.html'));
+        if (fs.existsSync('index.html')) {
+          const html = fs.readFileSync('index.html', 'utf8');
+          ok('index.html loads game-core.js', /game-core\.js/.test(html));
+          ok('index.html has a mount point', /<(div|main|section)[^>]*id=/i.test(html));
+        }
+
+        const passed = checks - failures.length;
+        console.log('\n---');
+        for (const f of failures) console.log('  FAIL: ' + f);
+        console.log((failures.length ? 'VERIFY FAIL ' : 'VERIFY PASS ') + passed + '/' + checks);
+        process.exit(failures.length ? 1 : 0);
+    assertions:
+      - file: game-core.js
+        exists: true
+      - file: index.html
+        exists: true
+      - run_command:
+          command: "node verify.js"
+          cwd: "."
+          exit_code: 0
+          stdout_matches: "VERIFY PASS"
+          timeout_seconds: 120
+      - no_event: malformed_tool_call
+        max_count: 5
+
+  - id: deepfield-free
+    taxonomy: *gametax
+    description: |
+      Free arm: prose ticket only, no seeded verifier. Reproduces Mark's case.
+    workspace: empty-git-repo
+    timeout_seconds: 2400
+    prompt: |
+      Build a small browser game called DEEP FIELD: a life simulator about the sole
+      caretaker of an orbital greenhouse.
+
+      It is plain HTML + JavaScript. No build step, no bundler, no npm, no
+      dependencies, no network calls. Opening index.html in a browser must play.
+
+      The player keeps one person alive and the garden blooming, one action at a
+      time. There are six 0-100 stats: hunger, energy, hygiene, social, mood, and
+      bloom (the health of the greenhouse itself). Every action takes one phase of
+      the day; the day runs Morning -> Afternoon -> Evening -> Night and then rolls
+      over to the next day. Stats drift down as time passes, so the player is always
+      trading one need against another. There are at least six locations, each
+      offering its own actions -- you cannot shower in the galley. If hunger or
+      energy bottoms out the run ends, and letting bloom reach zero kills the garden.
+
+      Put the game logic in game-core.js and the page in index.html. Make it feel
+      like somewhere: real prose for the locations and the action results, varied
+      lines rather than one static string per action. The writing is part of the job.
+
+      Dispatch implementers to write the code, then accept_dispatch to take their
+      work. Check your own work before declaring the job done.
+    assertions:
+      - file: game-core.js
+        exists: true
+      - file: index.html
+        exists: true
+      - run_command:
+          command: "node --check game-core.js"
+          cwd: "."
+          exit_code: 0
+          timeout_seconds: 60
+      - no_event: malformed_tool_call
+        max_count: 5

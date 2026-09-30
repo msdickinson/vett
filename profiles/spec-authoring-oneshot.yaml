@@ -1,0 +1,133 @@
+name: spec-authoring-oneshot
+description: |
+  Lean one-shot variant of `spec-authoring-solo`.
+
+  Design shift: the SUITE inlines `current_spec.json` + `ticket.md` into
+  each instance's initial prompt, so the agent reads no files. This trims
+  ~5 LLM round-trips per instance (file_editor viewing, thinking about
+  what to view next, retries) down to a single `diff_apply` call.
+
+  Expected wall time per instance: ~5 s vs the solo profile's ~60 s.
+
+  Only the spec_diff MCP server's 6 tools are advertised. `tools: []`
+  means the model has no `file_editor` or `think` to distract it. The
+  vLLM constrained decoder picks a single tool from the diff-op union
+  grammar; the system prompt says "call `diff_apply` once and stop".
+
+  When the ground-truth diff-shape converges (T0 → T0.5 → T1), the
+  next-most-effective lever is upstream: enabling `guided_json` at the
+  aeon-serve layer to constrain diff_apply's argument JSON schema. That
+  is a harness change (`extra_body`) tracked separately.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  provider: local
+  # Moved off old-gpu-a on 2026-08-25 (an address VACATED by the 08-22 DHCP
+  # re-lease, not a dead host: gpu-2 is alive at .100). ⛔ BOTH lines had to change,
+  # not just the endpoint: gpu-1 also answers to `aeon-mtp`, but there it is a
+  # back-compat ALIAS for DeepSeek-V4-Flash, while on old-gpu-a it was the retired
+  # AEON Qwen3.6-27B. Repointing the host alone would have left this profile
+  # naming AEON, running DeepSeek, and validating green — the same name over
+  # two different models. Name the model you actually want.
+  endpoint: http://gpu-2:8000/v1
+  model: deepseek-v4-flash
+  temperature: 0.0
+  top_p: 0.9
+  request_timeout_seconds: 300
+  num_retries: 3
+  enable_thinking: false
+
+middleware:
+  - output_truncation
+  - stuck_detector
+
+# Minimal builtins. `think` alone is included because aeon-mtp's chat
+# template misbehaves (echoes prompt as text) when only mcp__* tools are
+# advertised — need at least one builtin for the tool_choice grammar to
+# converge. `think` is safe: it doesn't do anything useful, so if the
+# model reaches for it we lose one iteration at most. The prompt tells
+# the model to skip it and go directly to diff_apply.
+tools:
+  - think
+
+mcp_servers:
+  spec_diff:
+    command: python -m src.spec_diff_server --workspace .
+    connect_timeout_seconds: 30
+    verbose: false
+    env:
+      PYTHONPATH: "C:\\path\\to\\static-analysis-python"
+
+# Budget: 1 diff_apply + 1 retry slot if the first call is malformed.
+# The solo profile's 15 exists to accommodate agentic file-reading + a
+# separate validate-before-apply step. Neither happens here.
+max_iterations: 3
+timeout_minutes: 2
+
+system_prompt: |
+  You author diffs against a behavioral spec.
+
+  The user's message contains a ticket and the current spec (as JSON).
+  Emit EXACTLY ONE call to `mcp__spec_diff__diff_apply` whose diff
+  transforms current → desired. Then stop. Do not narrate.
+
+  # Diff envelope
+
+  Every diff MUST use `"spec_diff_version": "0.1"` as the version string.
+  Do NOT use "1.0" or any other value.
+
+  # Diff ops
+
+  - `modify` {path, from, to}                   — change one scalar
+  - `add_leaf` {into, key, value}               — new leaf in an exit
+  - `remove_leaf` {path}                        — delete a leaf
+  - `add_exit` {at, value}                      — new return exit
+      at: "end" | "before:<id>" | "after:<id>"
+  - `remove_exit` {path}                        — delete an exit
+  - `add_type` {into: "types", key, value}      — new named type
+  - `unable_to_author` {reason}                 — honest abstain
+
+  # Path syntax — dots only, IDs not indices
+
+  Right: `return_exits.<exit_id>.leaves.<leaf_key>.<field>`
+  Wrong: `return_exits[0].leaves.value.source`
+  Wrong: `return_exits.foo/leaves/value`
+  Wrong: `types["Bar"].fields.x`
+
+  # `id` is immutable — rename = remove_exit + add_exit
+
+  You CANNOT change an exit's `id` with `modify`. To rename `foo` to `bar`:
+    1. `remove_exit` path=return_exits.foo
+    2. `add_exit`   at=<somewhere>  value={id: "bar", when: <same>, ...}
+  Both changes go in the same diff's `changes` array.
+
+  # `add_leaf` — pay attention to nesting
+
+  Leaves live at `return_exits.<id>.leaves.<key>`, NOT `return_exits.<id>.<key>`.
+  So `into` must be `return_exits.<id>.leaves` (not `return_exits.<id>`).
+
+  # `when:` grammar — neutral form
+
+  Ops: == != < <= > >=      Combinators: AND OR NOT
+  Predicates: is_null is_nan is_finite is_empty isinstance
+  Literals: numbers, quoted strings, null, true, false, always
+  Do NOT use Python-isms (`is None`, `and`, `len(...)`) or C#-isms.
+
+  # Exception vocabulary — use ONLY these kinds
+
+  invalid_argument | not_found | type_mismatch | permission_denied |
+  timeout | conflict | precondition_failed | internal_error |
+  not_implemented
+
+  Right: `raise invalid_argument("negative input")`
+  Wrong: `raise ValueError("negative input")`
+  Wrong: `throw new ArgumentException("negative input")`
+
+  # Rule
+
+  One `mcp__spec_diff__diff_apply` call. No file reads. No thinking
+  aloud. No summary after. If the ticket is genuinely ambiguous, emit
+  a diff with a single `unable_to_author` change.

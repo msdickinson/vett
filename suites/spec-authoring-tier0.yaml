@@ -1,0 +1,756 @@
+name: spec-authoring-tier0
+description: |
+  T0 — trivial synthetic spec-authoring probes. 10 instances = 5 semantic
+  pairs, each paired 1:1 Python↔C# for cross-language isomorphism.
+
+  Task per instance: read the current spec + the ticket, emit exactly one
+  `diff_apply` call whose diff transforms current → desired.
+
+  What T0 measures:
+    Q1 (well-formedness): AI's diff is schema-valid, paths resolve, exits
+      partition input space. Target: 100% (10/10).
+    Q2 (correctness): AI's diff produces a spec that captures the ticket's
+      intent. Human-verifiable. Target: 80%+ (8/10). Scored by external
+      script against .groundtruth/desired_spec.json per instance.
+
+  What T0 does NOT test:
+    - Cross-file targets (T0.5+)
+    - Multi-file bugs (T1+)
+    - Anything beyond 1-2 diff ops per instance
+    - add_type / test / remove_leaf ops (deferred to T0.5)
+
+  Diff ops covered by these 5 pairs:
+    Pair 1: modify (leaf source)
+    Pair 2: modify (when: condition)
+    Pair 3: add_exit + modify (when:)
+    Pair 4: remove_exit + add_exit (the id-immutability rename trap)
+    Pair 5: add_leaf
+
+  Ground-truth desired_spec.json for each instance lives in
+  .groundtruth/desired_spec.json seed. The AI's prompt does NOT reference
+  that path. Trust-based enforcement (T0 tolerates this; real corpus would
+  filesystem-sandbox it).
+
+  Run:
+    vett team-bench spec-authoring-tier0 --profile spec-authoring-solo --json > t0.json
+  Score Q1 + Q2:
+    python spec_q1_report.py t0.json
+
+profile: spec-authoring-solo
+tier: 0
+
+# Every instance carries the same taxonomy shape — spec-authoring, tier 0,
+# trivial synthetic, no real repo, no test verification (Q2 scored via
+# desired_spec comparison, not pytest).
+
+instances:
+
+  # ==================================================================
+  # PAIR 1 — modify (leaf source)
+  # ==================================================================
+
+  - id: sa-t0-py-01-bump-literal
+    taxonomy:
+      language: "python"
+      spec_change_kind: "modify_leaf_source"
+      diff_size_bucket: "1"
+      pair_id: "01"
+    description: |
+      bump(x) returns x + 1; should return x + 2. Single-op modify.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — bump increments by wrong amount
+
+        The `bump(x)` function currently returns `x + 1`. Per the updated
+        spec, it should return `x + 2`.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.always.leaves.value.source",
+          "from":"x + 1","to":"x + 2"}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  - id: sa-t0-cs-01-bump-literal
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "modify_leaf_source"
+      diff_size_bucket: "1"
+      pair_id: "01"
+    description: |
+      Bump(x) returns x + 1; should return x + 2. C# pair of py-01.
+      Spec text must be byte-identical to py-01.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — Bump increments by wrong amount
+
+        The `Bump(x)` method currently returns `x + 1`. Per the updated
+        spec, it should return `x + 2`.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 1","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"bump",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"integer",
+             "leaves":{"value":{"source":"x + 2","determinism":"computed",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.always.leaves.value.source",
+          "from":"x + 1","to":"x + 2"}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  # ==================================================================
+  # PAIR 2 — modify (when: condition threshold)
+  # ==================================================================
+
+  - id: sa-t0-py-02-age-threshold
+    taxonomy:
+      language: "python"
+      spec_change_kind: "modify_when_condition"
+      diff_size_bucket: "2"
+      pair_id: "02"
+    description: |
+      is_valid_age(age) uses adult threshold 18; should be 21.
+      Two modify ops on when: conditions.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — is_valid_age uses wrong threshold
+
+        `is_valid_age(age)` currently returns `true` for `age >= 18`.
+        The regulatory requirement changed; it should return `true` only
+        for `age >= 21`.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"is_valid_age",
+                     "inputs":[{"name":"age","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"age >= 18","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"age < 18","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"is_valid_age",
+                     "inputs":[{"name":"age","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"age >= 21","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"age < 21","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.pass.when",
+          "from":"age >= 18","to":"age >= 21"},
+         {"op":"modify","path":"return_exits.fail.when",
+          "from":"age < 18","to":"age < 21"}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  - id: sa-t0-cs-02-age-threshold
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "modify_when_condition"
+      diff_size_bucket: "2"
+      pair_id: "02"
+    description: |
+      IsValidAge(age) uses adult threshold 18; should be 21.
+      C# pair of py-02. Spec text byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — IsValidAge uses wrong threshold
+
+        `IsValidAge(age)` currently returns `true` for `age >= 18`.
+        The regulatory requirement changed; it should return `true` only
+        for `age >= 21`.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"is_valid_age",
+                     "inputs":[{"name":"age","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"age >= 18","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"age < 18","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"is_valid_age",
+                     "inputs":[{"name":"age","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"pass","when":"age >= 21","returns":"boolean",
+             "leaves":{"value":{"source":"true","determinism":"constant"}}},
+            {"id":"fail","when":"age < 21","returns":"boolean",
+             "leaves":{"value":{"source":"false","determinism":"constant"}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.pass.when",
+          "from":"age >= 18","to":"age >= 21"},
+         {"op":"modify","path":"return_exits.fail.when",
+          "from":"age < 18","to":"age < 21"}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  # ==================================================================
+  # PAIR 3 — add_exit + modify (add validation branch)
+  # ==================================================================
+
+  - id: sa-t0-py-03-divide-zero-check
+    taxonomy:
+      language: "python"
+      spec_change_kind: "add_validation_branch"
+      diff_size_bucket: "2"
+      pair_id: "03"
+    description: |
+      divide(a, b) crashes when b == 0; should raise invalid_argument.
+      One modify + one add_exit.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — divide crashes on zero divisor
+
+        `divide(a, b)` currently computes `a / b` unconditionally,
+        crashing when `b == 0`. Per the spec update, it should raise
+        `invalid_argument("division by zero")` when `b == 0`, and return
+        `a / b` otherwise.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"divide",
+                     "inputs":[{"name":"a","type":"number"},
+                               {"name":"b","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"number",
+             "leaves":{"value":{"source":"a / b","determinism":"computed",
+                                "depends_on":["a","b"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"divide",
+                     "inputs":[{"name":"a","type":"number"},
+                               {"name":"b","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"divide_by_zero","when":"b == 0","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                                "determinism":"constant"}}},
+            {"id":"always","when":"b != 0","returns":"number",
+             "leaves":{"value":{"source":"a / b","determinism":"computed",
+                                "depends_on":["a","b"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.always.when",
+          "from":"always","to":"b != 0"},
+         {"op":"add_exit","at":"before:always","value":{
+           "id":"divide_by_zero","when":"b == 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  - id: sa-t0-cs-03-divide-zero-check
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "add_validation_branch"
+      diff_size_bucket: "2"
+      pair_id: "03"
+    description: |
+      Divide(a, b) crashes when b == 0; should raise invalid_argument.
+      C# pair of py-03. Spec text byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — Divide crashes on zero divisor
+
+        `Divide(a, b)` currently computes `a / b` unconditionally,
+        crashing when `b == 0`. Per the spec update, it should raise
+        `invalid_argument("division by zero")` when `b == 0`, and return
+        `a / b` otherwise.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"divide",
+                     "inputs":[{"name":"a","type":"number"},
+                               {"name":"b","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"always","when":"always","returns":"number",
+             "leaves":{"value":{"source":"a / b","determinism":"computed",
+                                "depends_on":["a","b"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"divide",
+                     "inputs":[{"name":"a","type":"number"},
+                               {"name":"b","type":"number"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"divide_by_zero","when":"b == 0","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                                "determinism":"constant"}}},
+            {"id":"always","when":"b != 0","returns":"number",
+             "leaves":{"value":{"source":"a / b","determinism":"computed",
+                                "depends_on":["a","b"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"modify","path":"return_exits.always.when",
+          "from":"always","to":"b != 0"},
+         {"op":"add_exit","at":"before:always","value":{
+           "id":"divide_by_zero","when":"b == 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"division by zero\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  # ==================================================================
+  # PAIR 4 — remove_exit + add_exit (id-immutability rename trap)
+  # ==================================================================
+
+  - id: sa-t0-py-04-clamp-raise-rename
+    taxonomy:
+      language: "python"
+      spec_change_kind: "rename_exit_change_returns"
+      diff_size_bucket: "2"
+      pair_id: "04"
+    description: |
+      clamp(x) returns 0 for negatives; should raise invalid_argument.
+      Tests the id-immutability rule: must be remove_exit + add_exit,
+      NOT modify on `id` (would fail validation).
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — clamp swallows negatives instead of erroring
+
+        `clamp(x)` currently returns `0` for any negative `x`. Per the
+        spec update, it should raise `invalid_argument("negative input")`
+        instead. The non-negative branch is unchanged.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"clamp",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"neg_clamp","when":"x < 0","returns":"integer",
+             "leaves":{"value":{"source":"0","determinism":"constant"}}},
+            {"id":"identity","when":"x >= 0","returns":"integer",
+             "leaves":{"value":{"source":"x","determinism":"input",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"clamp",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"raise_neg","when":"x < 0","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                                "determinism":"constant"}}},
+            {"id":"identity","when":"x >= 0","returns":"integer",
+             "leaves":{"value":{"source":"x","determinism":"input",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"remove_exit","path":"return_exits.neg_clamp"},
+         {"op":"add_exit","at":"before:identity","value":{
+           "id":"raise_neg","when":"x < 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  - id: sa-t0-cs-04-clamp-raise-rename
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "rename_exit_change_returns"
+      diff_size_bucket: "2"
+      pair_id: "04"
+    description: |
+      Clamp(x) returns 0 for negatives; should raise invalid_argument.
+      C# pair of py-04. Spec text byte-identical. Tests id-immutability.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Bug — Clamp swallows negatives instead of erroring
+
+        `Clamp(x)` currently returns `0` for any negative `x`. Per the
+        spec update, it should raise `invalid_argument("negative input")`
+        instead. The non-negative branch is unchanged.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"clamp",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"neg_clamp","when":"x < 0","returns":"integer",
+             "leaves":{"value":{"source":"0","determinism":"constant"}}},
+            {"id":"identity","when":"x >= 0","returns":"integer",
+             "leaves":{"value":{"source":"x","determinism":"input",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"clamp",
+                     "inputs":[{"name":"x","type":"integer"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {},
+          "return_exits": [
+            {"id":"raise_neg","when":"x < 0","returns":"raises",
+             "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                                "determinism":"constant"}}},
+            {"id":"identity","when":"x >= 0","returns":"integer",
+             "leaves":{"value":{"source":"x","determinism":"input",
+                                "depends_on":["x"]}}}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"remove_exit","path":"return_exits.neg_clamp"},
+         {"op":"add_exit","at":"before:identity","value":{
+           "id":"raise_neg","when":"x < 0","returns":"raises",
+           "leaves":{"value":{"source":"raise invalid_argument(\"negative input\")",
+                              "determinism":"constant"}}}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  # ==================================================================
+  # PAIR 5 — add_leaf (new response field)
+  # ==================================================================
+
+  - id: sa-t0-py-05-user-summary-active
+    taxonomy:
+      language: "python"
+      spec_change_kind: "add_response_field"
+      diff_size_bucket: "1"
+      pair_id: "05"
+    description: |
+      get_user_summary(user) returns {name, email}; should also include
+      active. Single add_leaf op.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Feature — user summary should include active status
+
+        `get_user_summary(user)` currently returns `{name, email}`. Per
+        the updated spec, it should also include `active`, sourced from
+        `user.is_active`. Deterministically from input.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]},
+               "active":{"source":"user.is_active","determinism":"input",
+                         "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+          "value":{"source":"user.is_active","determinism":"input",
+                   "depends_on":["user"]}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5
+
+  - id: sa-t0-cs-05-user-summary-active
+    taxonomy:
+      language: "csharp"
+      spec_change_kind: "add_response_field"
+      diff_size_bucket: "1"
+      pair_id: "05"
+    description: |
+      GetUserSummary(user) returns {name, email}; should include active.
+      C# pair of py-05. Spec text byte-identical.
+    workspace: empty-git-repo
+    seed_files:
+      ticket.md: |
+        # Feature — user summary should include active status
+
+        `GetUserSummary(user)` currently returns `{name, email}`. Per
+        the updated spec, it should also include `active`, sourced from
+        `user.is_active`. Deterministically from input.
+      current_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_spec.json: |
+        {
+          "spec_version": "0.4",
+          "target": {"kind":"function","name":"get_user_summary",
+                     "inputs":[{"name":"user","type":"User"}],
+                     "stateful":false,"state_fields":{}},
+          "types": {
+            "User": {"kind":"record",
+                     "fields":{"name":"string","email":"string",
+                               "is_active":"boolean"}}
+          },
+          "return_exits": [
+            {"id":"ok","when":"always","returns":"map<string,any>",
+             "leaves":{
+               "name":{"source":"user.name","determinism":"input",
+                       "depends_on":["user"]},
+               "email":{"source":"user.email","determinism":"input",
+                        "depends_on":["user"]},
+               "active":{"source":"user.is_active","determinism":"input",
+                         "depends_on":["user"]}
+             }}
+          ],
+          "external_calls": []
+        }
+      .groundtruth/desired_diff.json: |
+        {"spec_diff_version":"0.1","changes":[
+         {"op":"add_leaf","into":"return_exits.ok.leaves","key":"active",
+          "value":{"source":"user.is_active","determinism":"input",
+                   "depends_on":["user"]}}
+        ]}
+    prompt: |
+      Read `current_spec.json` and `ticket.md`. Emit exactly one
+      `mcp__spec_diff__diff_apply` call whose diff makes the spec match
+      the ticket. Do not read any file under `.groundtruth/`.
+    timeout_seconds: 180
+    assertions:
+      - tool_call: mcp__spec_diff__diff_apply
+        success: true
+      - budget:
+          leader_iters_max: 5

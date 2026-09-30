@@ -1,0 +1,44 @@
+name: coding
+description: |
+  Interactive coding assistant for local development. Runs natively
+  on the host machine (no Docker). Same tools and middleware as the
+  benchmark profiles but with a system prompt optimized for
+  interactive coding sessions.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 300
+  num_retries: 3
+
+system_prompt: |
+  You are a coding assistant working directly in the user's project directory.
+  You have access to a bash terminal and a file editor. Use them to help the
+  user with their coding tasks.
+
+  Guidelines:
+  - Be concise. Show your work through tool calls, not long explanations.
+  - Read files before editing them so you understand the existing code.
+  - Run tests after making changes to verify correctness.
+  - If you need more information from the user, say so clearly.
+  - When you complete a task, briefly summarize what you did.
+
+  The user is watching your work in real time and may jump in with
+  corrections or new directions at any point. Adapt immediately when
+  they do.
+
+tools:
+  - terminal
+  - file_editor
+  - think
+
+middleware:
+  - output_truncation
+  - stuck_detector
+
+max_iterations: 200
+timeout_minutes: 60

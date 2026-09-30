@@ -1,0 +1,59 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <!-- Content already ships inside tools/ with the tool; skip the duplicate content/ copies. -->
+    <IncludeContentInPack>false</IncludeContentInPack>
+    <ToolCommandName>vett</ToolCommandName>
+    <PackageId>VettBench</PackageId>
+    <Version>0.1.1</Version>
+    <Description>Pluggable AI coding agent harness — benchmark, chat, and team orchestration</Description>
+    <Authors>DickinsonBros</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/msdickinson/vett</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/msdickinson/vett</PackageProjectUrl>
+    <PackageTags>ai;agent;swe-bench;benchmark;llm;coding-agent</PackageTags>
+  </PropertyGroup>
+
+  <!-- The dotnet_test summary parser is `internal`: it is a ruler detail, not
+       public API, but it MUST be provable two-sided from the test project.
+       Its counting rule was silently wrong (graded a whole solution on
+       whichever test project printed first) precisely because it was only
+       reachable through a method that shells out to `dotnet test`. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Vett.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.6" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.6" />
+    <PackageReference Include="OpenAI" Version="2.10.0" />
+    <PackageReference Include="System.CommandLine" Version="3.0.0-preview.3.26207.106" />
+    <PackageReference Include="YamlDotNet" Version="17.0.1" />
+  </ItemGroup>
+
+  <!-- Embed schemas, profiles, suites, and defaults so they ship inside the tool.
+       Without bundled suites, `vett run` with a suite name only resolves it
+       from the workspace cwd; bundled defaults are unreachable. -->
+  <ItemGroup>
+    <Content Include="..\..\schemas\**" CopyToOutputDirectory="PreserveNewest" LinkBase="schemas" />
+    <Content Include="..\..\profiles\**" CopyToOutputDirectory="PreserveNewest" LinkBase="profiles" />
+    <Content Include="..\..\suites\**" CopyToOutputDirectory="PreserveNewest" LinkBase="suites" />
+    <Content Include="..\..\testdata\**" CopyToOutputDirectory="PreserveNewest" LinkBase="testdata" />
+    <Content Include="..\..\defaults\**" CopyToOutputDirectory="PreserveNewest" LinkBase="defaults" />
+    <Content Include="..\..\pipelines\**" CopyToOutputDirectory="PreserveNewest" LinkBase="pipelines" />
+    <Content Include="..\..\bench-profiles\**" CopyToOutputDirectory="PreserveNewest" LinkBase="bench-profiles" />
+    <Content Include="..\..\capabilities\**" CopyToOutputDirectory="PreserveNewest" LinkBase="capabilities" />
+    <!-- Sidecar binaries, when built (sidecar/Makefile sidecar-all). They land next to
+         vett.dll, the first place the CLI looks after VETT_SIDECAR_PATH. -->
+    <Content Include="..\..\bin\vett-sidecar-*" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

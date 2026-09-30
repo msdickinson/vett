@@ -1,0 +1,6 @@
+# vett:tool pytest
+# vett:param args string "Pytest CLI arguments (e.g. \"-x tests/foo.py\")"
+name: pytest
+description: Run pytest with optional arguments
+command: "pytest {args}"
+timeout_seconds: 120

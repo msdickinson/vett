@@ -1,0 +1,123 @@
+name: coding
+description: |
+  Interactive coding assistant for local development. Runs natively
+  on the host machine (no Docker). Same tools and middleware as the
+  benchmark profiles but with a system prompt optimized for
+  interactive coding sessions.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  # This is the VETT Chat extension's DEFAULT profile
+  # (`vett-chat.profile`, package.json). It carried no endpoint/model, so a
+  # fresh install with no VETT_LLM_* env vars could not open a session at
+  # all — `chat` refuses with "endpoint and model are required". Measured
+  # 2026-08-26. Precedence is --endpoint/--model ▸ VETT_LLM_* ▸ profile, so
+  # naming them here is the LOWEST-priority source: anyone already driving
+  # this profile from the environment is unaffected.
+  provider: local
+  endpoint: http://localhost:8000/v1
+  model: deepseek-v4-flash
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 300
+  num_retries: 3
+
+system_prompt: |
+  You are a coding assistant working directly in the user's project directory.
+  You have access to a bash terminal and a file editor. Use them to help the
+  user with their coding tasks.
+
+  Guidelines:
+  - Be concise. Show your work through tool calls, not long explanations.
+  - Read files before editing them so you understand the existing code.
+  - Run tests after making changes to verify correctness.
+  - If you need more information from the user, say so clearly.
+  - When you complete a task, briefly summarize what you did.
+
+  The user is watching your work in real time and may jump in with
+  corrections or new directions at any point. Adapt immediately when
+  they do.
+
+tools:
+  - terminal
+  - file_editor
+  - think
+
+middleware:
+  - output_truncation
+  - stuck_detector
+  # ⭐ 2026-08-26. This profile is the VETT Chat extension's DEFAULT
+  # (`vett-chat.profile`, package.json:177) and it is allowed to run 200
+  # iterations across 60 minutes — and it carried NO compaction strategy at
+  # all. Not a mistuned threshold: `output_truncation` caps a single tool
+  # result and `stuck_detector` watches for loops; neither one ever removes
+  # anything from the transcript. So the default chat session grew its
+  # context monotonically until the model refused, which surfaces to the
+  # user as the chat dying near the end of a long session rather than as a
+  # configuration problem. The team profiles had this repaired on the same
+  # day (coding-team-v2.yaml, note (A)); the SOLO profiles were never looked
+  # at, because the gate that found it only inspected profiles with a
+  # `team:` block and skipped every other one vacuously.
+  #
+  # llm_summarizing_condenser rather than milestone_checkpoint: this is an
+  # interactive session where the dropped middle IS the user's own earlier
+  # instructions, so a state-preserving LLM summary is worth its one extra
+  # call. It needs an LlmSettings to register, which ChatCommand.cs:968/1082
+  # does thread through — and if a future call site forgets, MiddlewareResolver
+  # now degrades to milestone_checkpoint at this same threshold rather than
+  # silently resolving to nothing.
+  - llm_summarizing_condenser
+  # Trims OLD tool observations (keeps the last 5 intact). Large `view` and
+  # terminal outputs are what actually fills a coding session's window, and
+  # eliding them defers the condenser rather than replacing it.
+  - observation_elision
+
+# ⛔ DECLARED EXPLICITLY, NOT LEFT TO THE DEFAULT. MiddlewareResolver does
+# `compaction ?? new CompactionConfig()`, and CompactionConfig.ThresholdTokens
+# defaults to 30000 — the value hardcoded before this block existed. Omitting
+# the block therefore reads as "no opinion on compaction" while actually
+# carrying a strong, stale one: on this endpoint's 65536-token window it would
+# compact at under half the space that is actually available.
+#
+# 100000 matches ds-solo-flash / ds-team-flash, which run against the same
+# deepseek-v4-flash endpoint and are the values tracked to this window; it
+# leaves ~31k of headroom for the reply and the next few turns.
+# >> RESTORED 2026-08-28: 48000 -> 100000. The Sparks were relaunched at
+# --gpu-memory-utilization 0.85 --max-model-len 131072 (gpu-1, container
+# vllm_dsv4), and `curl -s http://localhost:8000/v1/models` now returns
+# "max_model_len": 131072. The 65536 the text above cites is HISTORY, not the
+# current server. Roll back to 48000 only if the Sparks return to 65536.
+compaction:
+  threshold_tokens: 100000
+  keep_last_messages: 8
+
+# Per-kind tool-call gating for chat sessions. Each value is `auto`
+# (run without prompting), `ask` (prompt the user), or `deny` (return
+# an error to the agent). The classifier maps each tool call to a
+# kind: read = file_editor view; edit = file_editor create/replace +
+# update_memory; terminal_safe = whitelisted read-only commands (ls,
+# cat, git status, etc); terminal_unsafe = anything else; mcp =
+# MCP-tool calls. Benchmarks (`vett run`) ignore this block entirely.
+# Remove the `permissions:` block to disable gating for this profile.
+permissions:
+  read: auto
+  edit: ask
+  terminal_safe: auto
+  terminal_unsafe: ask
+  mcp: ask
+
+# Aider-style repo map (#14): walks the workspace at session start,
+# extracts top-level signatures via regex per language (TS/JS/Python/
+# C#/Go/Rust/Java/Ruby/Swift), ranks files by signature count, and
+# injects a <repo_map> block into the system prompt. Gives the agent
+# "what's in this codebase" grounding without having to ls / grep
+# before every task. ~1k tokens of context.
+repo_map:
+  enabled: true
+  max_chars: 4000
+
+max_iterations: 200
+timeout_minutes: 60

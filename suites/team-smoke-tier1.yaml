@@ -1,0 +1,959 @@
+name: team-smoke-tier1
+description: |
+  Tier 1 sub-agent dispatch benchmarks. These should always (or nearly
+  always) pass. A failure here is a release blocker — something
+  fundamental in the dispatch flow regressed.
+
+  Run: vett team-bench team-smoke-tier1
+  Or:  vett team-bench --tier 1
+
+profile: ds-team-flash
+tier: 1
+
+# Each instance spins up a fresh workspace, runs vett's chat loop with
+# the profile + prompt, captures emitted events + filesystem state,
+# then evaluates assertions. All assertions must pass for the instance
+# to PASS. No LLM judge — every check is structural or regex.
+instances:
+  - id: t1-chat-no-tools
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Pure chat — leader greets the user without invoking any tool.
+    workspace: empty-git-repo
+    prompt: |
+      hi! in two short sentences, what can you do?
+    timeout_seconds: 60
+    assertions:
+      # No tool was called — leader didn't theatre-invoke `pwd`/`echo`/etc.
+      - no_event: tool_call_end
+      # No dispatch happened (a chat reply must NOT delegate).
+      - no_event: dispatch_start
+      # Leader actually said something to the user.
+      - assistant_text_contains: " "
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 3
+
+  - id: t2-leader-self-serve
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader self-serves a small file write — no dispatch, no member.
+    workspace: empty-git-repo
+    prompt: |
+      Create a file named hello.txt in the current directory whose first
+      line is exactly the words "hello world" (case-sensitive). Trailing
+      whitespace doesn't matter. Do NOT delegate to a member — handle it
+      yourself with file_editor. Then tell me you're done.
+    timeout_seconds: 180
+    assertions:
+      # Leader did the work itself (no dispatch).
+      - no_event: dispatch_start
+      # File starts with "hello world". Trailing characters are OK — we
+      # don't enforce a specific newline encoding here. If you want to
+      # test exact-newline-byte encoding, that's a separate instance.
+      - file: hello.txt
+        exists: true
+        content_matches: '^hello world\b'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          # 16, not 12: a t1-leader-self-serve run can hit 13-15 iters
+          # when the model retries a file_editor call after one glitched
+          # arg; we still want the task to PASS in that case since the
+          # actual write succeeded. Lower cap was hiding healthy runs.
+          leader_iters_max: 16
+
+  - id: t3-readme-create
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Single dispatch creates README.md, leader reviews + accepts.
+    workspace: empty-git-repo
+    prompt: |
+      Have an implementer create README.md with the project name "TestRepo"
+      and a one-paragraph description (3-5 sentences) of what this repo
+      contains. Single dispatch only — no parallel work. When the
+      implementer finishes, review their SELF-ASSESSMENT and the
+      diff_summary, then accept_dispatch if it looks right. Tell me
+      which task_id you accepted.
+    timeout_seconds: 180
+    assertions:
+      # Implementer dispatch produced a real diff and pending review.
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+
+      # Leader actually accepted (with a non-trivial review field — the
+      # required-field validation enforces this server-side, but we
+      # double-check here).
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+
+      # The README landed in the workspace with the right shape.
+      - file: README.md
+        exists: true
+        content_matches: '^#\s*TestRepo\b'
+
+      # No malformed-tool-call events fired — this catches the "we
+      # papered over a bug with retry" failure mode where the dispatch
+      # technically succeeded but the model needed to retry to get there.
+      - no_event: malformed_tool_call
+        max_count: 1
+
+      # Iteration budgets — Tier 1 is "did it work correctly," not
+      # "was it maximally efficient." Caps are generous: a clean run
+      # is 2-3 implementer + 3-4 leader iters, but the model often
+      # over-verifies (extra view calls, `git diff`, etc.). That's
+      # functionally fine. A tighter Tier 2 budget assertion will
+      # police efficiency once we have it.
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 12
+
+  - id: t4-researcher-relay
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Researcher reads a seeded file and the leader relays the answer to the user.
+    workspace: empty-git-repo
+    seed_files:
+      config.yaml: |
+        # service config
+        port: 8080
+        host: 0.0.0.0
+    prompt: |
+      Have the researcher tell you what port the server runs on by reading
+      config.yaml in the workspace, and then relay the answer to me in
+      your response. Single dispatch, researcher only.
+    timeout_seconds: 240
+    assertions:
+      # A researcher dispatch ran (not implementer).
+      - event: dispatch_end
+        member: researcher
+      # Leader's response to the user mentions 8080 — proves it actually
+      # read what the researcher returned, not just made up an answer.
+      - assistant_text_contains: "8080"
+      # Researcher did not edit anything.
+      - file: config.yaml
+        exists: true
+        content_matches: 'port:\s*8080'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 8
+
+  - id: t5-edit-existing
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer edits an existing file (str_replace path), leader accepts.
+    workspace: empty-git-repo
+    seed_files:
+      package.json: |
+        {
+          "name": "demo",
+          "version": "0.1.0"
+        }
+    prompt: |
+      Have an implementer bump the version in package.json from 0.1.0 to
+      0.2.0 — only that field, leave everything else unchanged. When the
+      implementer finishes, review and accept_dispatch.
+    timeout_seconds: 180
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: package.json
+        exists: true
+        content_matches: '"version"\s*:\s*"0\.2\.0"'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 12
+
+  - id: t6-multi-file-create
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Single dispatch creates two files (README + LICENSE), leader accepts.
+    workspace: empty-git-repo
+    prompt: |
+      Have an implementer create TWO files in a single dispatch:
+        1. README.md — heading "# Demo" and one short sentence describing the project.
+        2. LICENSE — exactly this one line and nothing else: "MIT License (c) 2026 Dickinson Bros".
+      When the implementer finishes, review and accept_dispatch.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 2
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: README.md
+        exists: true
+        content_matches: '^#\s*Demo\b'
+      - file: LICENSE
+        exists: true
+        content_matches: 'MIT License'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 12
+
+  - id: t7-leader-uses-terminal
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader runs a terminal command directly and reports the result. No dispatch.
+    workspace: empty-git-repo
+    prompt: |
+      Run `git log --oneline` and tell me how many commits there are
+      in the repository. Phrase your answer as a literal sentence
+      ending with the word "commit" or "commits" (e.g. "There is 1
+      commit." or "Found 1 commit."). Use the digit form (1, 2, 3),
+      not the word form (one, two, three). Do NOT dispatch a member —
+      handle it yourself with the terminal tool.
+    timeout_seconds: 90
+    assertions:
+      # Leader did it itself.
+      - no_event: dispatch_start
+      # Leader actually called terminal.
+      - tool_call: terminal
+        success: true
+      # Final answer mentions the digit "1". (Test on empty-git-repo
+      # template, which makes one init commit; the prompt asks for
+      # digit form to avoid the "one" / "1" ambiguity.)
+      - assistant_text_contains: "1"
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          leader_iters_max: 6
+
+  - id: t8-subdir-create
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer creates a file in a subdirectory, leader accepts.
+    workspace: empty-git-repo
+    prompt: |
+      Have an implementer create the file `src/index.js` (note the
+      subdirectory) with exactly this content (and nothing else):
+
+          console.log("hi");
+
+      Review and accept_dispatch.
+    timeout_seconds: 180
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: src/index.js
+        exists: true
+        content_matches: 'console\.log\("hi"\)'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 12
+
+  - id: t9-researcher-missing-file
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Researcher dispatched to read a file that doesn't exist; gracefully reports back.
+    workspace: empty-git-repo
+    prompt: |
+      Have the researcher read `nonexistent.yaml` in the workspace and
+      tell you what's in it. Then relay to me whatever the researcher
+      reports — exactly, in your own words.
+    timeout_seconds: 180
+    assertions:
+      - event: dispatch_end
+        member: researcher
+      # Leader actually relays a "doesn't exist" / "not found" / similar
+      # phrase. We allow several wordings via the assertion engine doing
+      # case-insensitive substring; pick a fragment any reasonable answer
+      # would contain.
+      - assistant_text_contains: "exist"
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 8
+
+  - id: t10-fix-typo
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer uses str_replace to fix a typo in a seeded file.
+    workspace: empty-git-repo
+    seed_files:
+      greeting.txt: |
+        helo world
+    prompt: |
+      Have an implementer fix the typo in greeting.txt — the file
+      currently contains "helo world" and should say "hello world"
+      instead. Review and accept_dispatch.
+    timeout_seconds: 180
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: greeting.txt
+        exists: true
+        content_matches: '^hello world\s*$'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 12
+
+  # ---------- Tool-coverage expansion (t11-t26) ----------------------
+  # Each instance below targets ONE tool surface that t1-t10 don't
+  # exercise structurally. Naming groups the leader-coordination tools
+  # (assign_async, continue_task, wait_task, cancel_task, inject_into_task,
+  # check_task, check_tasks, review_dispatch, list_pending_dispatches,
+  # declare_done, reject_dispatch) and the member-side tool surfaces
+  # (file_editor.insert, file_editor.undo_edit, file_editor.view,
+  # member terminal, report_progress).
+
+  - id: t11-async-dispatch
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader uses assign_async (fire-and-forget); result auto-delivers in a future turn; leader accepts.
+    workspace: empty-git-repo
+    prompt: |
+      Use assign_async (NOT assign_task — it must be assign_async) to
+      have an implementer create the file `async-output.txt` with the
+      content "ok\n" (just "ok" followed by a newline). After
+      dispatching, acknowledge the task in one short sentence and end
+      your turn — do NOT call any other tools yet. The result will
+      auto-deliver in a future turn; when the pending-review block
+      arrives, review and accept_dispatch.
+
+      IMPORTANT: this test validates the async-accept flow. When the
+      result arrives, just accept_dispatch — do NOT reject and
+      re-dispatch even if the diff looks odd. The implementer's
+      output is what gets verified.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: assign_async
+        success: true
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: async-output.txt
+        exists: true
+        content_matches: '^ok\s*$'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 10
+
+  - id: t12-progress-stream
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer streams at least one report_progress mid-task. Kept deliberately short — multi-section prose tasks induce essay-mode drift on AEON, which masks whether report_progress itself works.
+    workspace: empty-git-repo
+    prompt: |
+      Have an implementer do exactly two things, in this order:
+        1. Use file_editor to create `notes.md` with the single
+           heading "# Notes" on the first line.
+        2. AFTER the file is created, invoke the `report_progress`
+           function tool (it's a real tool in your tool list, NOT a
+           shell command) with the message "notes.md created".
+      Then write SELF-ASSESSMENT and stop. The leader will review and
+      accept_dispatch.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: report_progress
+        success: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: notes.md
+        exists: true
+        content_matches: '^#\s*Notes\b'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 12
+
+  - id: t13-continue-thread
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: After a dispatch settles, leader uses continue_task to send a follow-up to the SAME member instance.
+    workspace: empty-git-repo
+    prompt: |
+      Two-step task — same implementer instance, no new dispatch.
+
+      Step 1: assign_task an implementer to create `log.txt` with the
+        single line "v1". Review and accept_dispatch.
+
+      Step 2: AFTER step 1 is accepted, use `continue_task` on that
+        SAME implementer's task_id (NOT a new assign_task — it must be
+        continue_task) with the message "now append a second line
+        saying v2 to that same file." Review and accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - tool_call: continue_task
+        success: true
+      - file: log.txt
+        exists: true
+        content_matches: '^v1\s*$'
+      - file: log.txt
+        content_matches: '^v2\s*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 20
+
+  - id: t14-inject-mid-flight
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "high"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader fires inject_into_task on the same turn as assign_async. T1 asserts only that the leader USES inject_into_task structurally — whether the inject lands before the member settles is a race covered by a future T2 instance.
+    workspace: empty-git-repo
+    prompt: |
+      Use assign_async to dispatch an implementer with this task:
+      "Create note.txt containing one short line: 'hello'."
+
+      ON THE SAME TURN as your assign_async (one response, two tool
+      calls), ALSO call `inject_into_task` on that implementer's
+      task_id with this message:
+        "scope shift — make the file content 'hello world' (two
+         words) instead of just 'hello'."
+      End your turn.
+
+      When the task settles (or fails), accept or reject as
+      appropriate. (If the run produced a clean note.txt either way,
+      accept_dispatch is fine — this test isn't grading the final
+      file contents, only that you invoked inject_into_task.)
+    timeout_seconds: 240
+    assertions:
+      - tool_call: assign_async
+        success: true
+      # Tool-call existence only; success can be false if a race put the
+      # member into Settled before inject queued (returns
+      # "task already settled" — that's a known timing concern, not a
+      # leader-behavior bug). The downstream "inject changed behavior"
+      # check belongs in a future T2 timing-tolerant suite.
+      - tool_call: inject_into_task
+      # Mid-flight inject genuinely confuses the model (AEON drifts
+      # when scope changes mid-task). Tolerance is bumped here.
+      - no_event: malformed_tool_call
+        max_count: 4
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 14
+
+  - id: t15-cancel-task
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Async task spawned then cancelled before completion; leader does not accept.
+    workspace: empty-git-repo
+    prompt: |
+      Use assign_async to dispatch an implementer with this task:
+      "Slowly create 10 files named s1.txt..s10.txt, each containing
+      its name as a single line. Take a brief think iteration between
+      each create."
+
+      On the SAME turn (no waiting) call `cancel_task` on that
+      implementer's task_id — change of plans, abandon the work.
+
+      DO NOT accept_dispatch — the run was cancelled and the diff (if
+      any) should be discarded. After the cancellation auto-delivers,
+      tell me which task_id you cancelled.
+    timeout_seconds: 240
+    assertions:
+      - tool_call: assign_async
+        success: true
+      - tool_call: cancel_task
+        success: true
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 10
+
+  # t16-wait-and-relay (wait_task) — NOT INCLUDED. Coordinator.cs strips
+  # wait_task / check_task / check_tasks from the leader when
+  # auto_inject_async_results=true (the production V2 profile). Auto-inject
+  # already covers the "did it finish" use case via background_task_results.
+  # These three tools are only reachable in a legacy polling profile; if we
+  # want to test them, build a separate `coding-team-v2-poll` profile with
+  # auto_inject_async_results=false and a parallel suite.
+
+  - id: t17-insert-line
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer uses file_editor `insert` (NOT str_replace, NOT create) to add a line at a specific position.
+    workspace: empty-git-repo
+    seed_files:
+      ordered.txt: |
+        line one
+        line three
+    prompt: |
+      Have an implementer use file_editor's `insert` command
+      (specifically the `insert` command — NOT str_replace, NOT create)
+      to add a new line "line two" between "line one" and "line three"
+      in ordered.txt. Review and accept_dispatch.
+    timeout_seconds: 180
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: file_editor
+        success: true
+        args_equals:
+          command: insert
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: ordered.txt
+        exists: true
+        content_matches: 'line one\s*\n\s*line two\s*\n\s*line three'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 12
+
+  - id: t18-undo-edit
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Three-step prescribed workflow that exercises file_editor.undo_edit. Leader or member is fine. The value sequence is prescribed so undo isn't optional — it's the only way the file gets back to v1.0.0.
+    workspace: empty-git-repo
+    seed_files:
+      version.txt: |
+        v1.0.0
+    prompt: |
+      You will perform exactly three file_editor operations on
+      version.txt — in order, no shortcuts:
+
+        Op 1: file_editor str_replace "v1.0.0" → "v9.9.9".
+              (this is the placeholder edit; do not skip it.)
+
+        Op 2: file_editor undo_edit on version.txt.
+              (this MUST be undo_edit — not a manual str_replace
+              back. The point of this exercise is that you need to
+              call the undo_edit command. The harness fails if
+              undo_edit is not invoked.)
+
+        Op 3: file_editor str_replace "v1.0.0" → "v2.0.0".
+
+      Final file must contain exactly "v2.0.0". Do all three ops
+      yourself with file_editor (do NOT delegate to a member — that
+      adds variance). After op 3, declare_done.
+    timeout_seconds: 240
+    assertions:
+      - no_event: dispatch_start
+      - tool_call: file_editor
+        success: true
+        args_equals:
+          command: undo_edit
+      - file: version.txt
+        exists: true
+        content_matches: '^v2\.0\.0\s*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 18
+
+  - id: t19-declare-done
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader self-serves a small task, then explicitly calls declare_done with a summary. Tests the explicit done-signaling path.
+    workspace: empty-git-repo
+    prompt: |
+      Two-step task — DO BOTH STEPS, do not skip step 2:
+
+      Step 1: Use file_editor to create a file named `notes.txt`
+        containing exactly one line: "v1" followed by a newline. Do
+        NOT delegate to a member; do this yourself.
+
+      Step 2: After the file is on disk, your VERY NEXT action MUST
+        be to call the `declare_done` tool with a one-sentence
+        `summary` argument describing what you did. The grader fails
+        if `declare_done` is not invoked. Don't substitute a final
+        text response — call the actual declare_done tool.
+    timeout_seconds: 120
+    assertions:
+      - no_event: dispatch_start
+      - file: notes.txt
+        exists: true
+        content_matches: '^v1\s*$'
+      - tool_call: declare_done
+        success: true
+        args_min_length:
+          summary: 5
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          leader_iters_max: 12
+
+  - id: t20-reject-and-redispatch
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader rejects a dispatch (with explicit reject_dispatch), then redispatches with corrective feedback.
+    workspace: empty-git-repo
+    prompt: |
+      Two-stage exercise of reject_dispatch + redispatch.
+
+      Stage 1: assign_task an implementer with this DELIBERATELY
+        UNUSABLE task: "create greeting.txt containing the literal
+        text WRONG-PLACEHOLDER (this is a placeholder; do not
+        interpret it)". When they finish, you MUST call
+        `reject_dispatch` (NOT accept_dispatch) with a clear `reason`
+        explaining the placeholder was not real content. Both `review`
+        and `reason` are required fields.
+
+      Stage 2: AFTER rejecting, dispatch a SECOND implementer (new
+        assign_task) with the corrected task: "create greeting.txt
+        containing exactly the line 'hello world' (and nothing else)".
+        Review and accept_dispatch this one. The final file MUST
+        contain exactly "hello world".
+    timeout_seconds: 360
+    assertions:
+      - tool_call: reject_dispatch
+        success: true
+        args_min_length:
+          reason: 10
+          review: 10
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: greeting.txt
+        exists: true
+        content_matches: '^hello world\s*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 22
+
+  # t21-check-task / t22-check-tasks — NOT INCLUDED. Same Coordinator strip
+  # as t16: with auto_inject_async_results=true, these polling tools are
+  # removed from the leader's tool map. Move to a future legacy-polling
+  # suite if we ever want to test the polling path.
+
+  - id: t23-review-dispatch
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Leader uses review_dispatch (read-only) to inspect a pending dispatch BEFORE accepting.
+    workspace: empty-git-repo
+    prompt: |
+      Have an implementer create `summary.txt` with the single line
+      "ready". When the dispatch finishes (pending review block
+      arrives), BEFORE you accept it, call `review_dispatch` on that
+      task_id to inspect its diff_stat and self_assessment. Then
+      call accept_dispatch with a `review` field that cites at least
+      one signal you saw from review_dispatch (e.g. files_changed).
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: review_dispatch
+        success: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: summary.txt
+        exists: true
+        content_matches: '^ready\s*$'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 12
+
+  # t24-list-pending — NOT INCLUDED. list_pending_dispatches is registered
+  # for the leader, but in chat mode the leader rationally prefers
+  # review_dispatch (per-task inspection) since it already gets the same
+  # info per dispatch. Two iterations of "audit-style" prompting failed
+  # 0/3 — the prompt language strong enough to force list_pending_dispatches
+  # destabilizes the run (leader spawns runaway parallel implementers).
+  # Conclusion: list-style inspection tools are inherently weakly motivated
+  # in chat mode. If we ever want to test it, do so under a profile where
+  # review_dispatch is removed or the dispatches are kept hidden.
+
+  - id: t25-impl-terminal
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Implementer member uses the `terminal` tool (NOT file_editor) to do its work — tests member-side terminal access.
+    workspace: empty-git-repo
+    seed_files:
+      data.txt: |
+        apple
+        banana
+        cherry
+    prompt: |
+      Have an implementer use the `terminal` tool (specifically
+      terminal — NOT file_editor) to count how many lines are in
+      data.txt and write that count as a single integer to a new file
+      `count.txt`, also via terminal (e.g. shell redirection like
+      `wc -l < data.txt > count.txt` or equivalent). Review and
+      accept_dispatch.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      - tool_call: terminal
+        success: true
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 20
+      - file: count.txt
+        exists: true
+        content_matches: '\b3\b'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 12
+
+  - id: t26-impl-view
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "1"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: Member (researcher OR implementer) uses file_editor `view` (read-only, NO edit) to inspect a seeded file and reports its content; tests the view sub-command.
+    workspace: empty-git-repo
+    seed_files:
+      secret.txt: |
+        token-9f83e1a4
+    prompt: |
+      Have a member (your pick — researcher or implementer) use
+      file_editor's `view` command (specifically view — NOT terminal
+      cat, NOT a different tool) to inspect secret.txt in the
+      workspace, then return the contents. DO NOT edit any files —
+      read-only inspection only. Relay the contents back to me in
+      your final response so I see "token-9f83e1a4".
+    timeout_seconds: 180
+    assertions:
+      # A dispatch happened; either role is fine since both have file_editor.
+      - event: dispatch_start
+      - tool_call: file_editor
+        success: true
+        args_equals:
+          command: view
+      - assistant_text_contains: "token-9f83e1a4"
+      - file: secret.txt
+        exists: true
+        content_matches: '^token-9f83e1a4\s*$'
+      - no_event: malformed_tool_call
+        max_count: 1
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 8

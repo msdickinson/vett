@@ -1,0 +1,496 @@
+name: team-modify-class-tier2
+description: |
+  A6 — Modify Class. Existing class is provided seeded + already
+  passing its baseline tests. The agent must extend or change the
+  class to meet a new requirement (add field, add method, change an
+  invariant). The seeded test file has the existing-baseline tests
+  PLUS new red tests for the new behavior; the agent has to turn
+  red → green without regressing the existing green tests.
+
+  This fills the A6 archetype gap — `ddd-modify-tier3` has 1 instance,
+  this adds 4 more so per-archetype rates have meaningful n.
+
+  Run: vett team-bench team-modify-class-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # mc1 — Add property to existing User class
+  # ============================================================
+  - id: mc1-add-fullname-property
+    taxonomy: &a6_tax
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      A6 — Extend the existing `User` class with a `FullName` computed
+      property that returns `FirstName + " " + LastName` (trimmed).
+      Existing 4 tests stay green; 3 new red tests for the property
+      turn green.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: &domain_csproj |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      User.cs: |
+        namespace Domain;
+
+        public class User
+        {
+            public string FirstName { get; }
+            public string LastName { get; }
+            public string Email { get; }
+
+            public User(string firstName, string lastName, string email)
+            {
+                if (string.IsNullOrWhiteSpace(firstName)) throw new ArgumentException("firstName required");
+                if (string.IsNullOrWhiteSpace(lastName)) throw new ArgumentException("lastName required");
+                if (string.IsNullOrWhiteSpace(email)) throw new ArgumentException("email required");
+                FirstName = firstName;
+                LastName = lastName;
+                Email = email;
+            }
+        }
+      User_Tests.cs: |
+        namespace Domain;
+
+        public class User_Tests
+        {
+            [Fact] public void Constructs_WithNames()
+            {
+                var u = new User("Ada", "Lovelace", "ada@example.com");
+                Assert.Equal("Ada", u.FirstName);
+                Assert.Equal("Lovelace", u.LastName);
+            }
+            [Fact] public void Email_Stored() => Assert.Equal("a@b", new User("x", "y", "a@b").Email);
+            [Fact] public void EmptyFirstName_Throws() => Assert.ThrowsAny<Exception>(() => new User("", "y", "a@b"));
+            [Fact] public void EmptyLastName_Throws() => Assert.ThrowsAny<Exception>(() => new User("x", "", "a@b"));
+
+            // --- NEW: FullName property ---
+            [Fact] public void FullName_JoinsNamesWithSpace()
+                => Assert.Equal("Ada Lovelace", new User("Ada", "Lovelace", "a@b").FullName);
+            [Fact] public void FullName_Trims_ExtraWhitespace()
+                => Assert.Equal("Ada Lovelace", new User("  Ada  ", " Lovelace ", "a@b").FullName);
+            [Fact] public void FullName_Caches_OrComputes()
+            {
+                // Either implementation is fine, just verify same value on repeat calls.
+                var u = new User("Ada", "Lovelace", "a@b");
+                Assert.Equal(u.FullName, u.FullName);
+            }
+        }
+    prompt: |
+      The `User.cs` file in this workspace has an existing User class
+      with FirstName, LastName, Email. There are 7 tests in
+      `User_Tests.cs` — 4 are passing, 3 are failing because they
+      reference a `FullName` property that doesn't exist yet.
+
+      Dispatch an implementer to add the `FullName` computed property:
+        - returns `FirstName + " " + LastName`
+        - trims extra whitespace around either name in the joined output
+          (so `"  Ada  "` + `" Lovelace "` → `"Ada Lovelace"`)
+
+      Keep the 4 existing tests green. Don't change the constructor,
+      don't change the existing properties. One-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: User.cs
+        exists: true
+      - file: User.cs
+        content_matches: 'FullName'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  # ============================================================
+  # mc2 — Add method to existing BoundedStack
+  # ============================================================
+  - id: mc2-add-peek-at
+    taxonomy: *a6_tax
+    description: |
+      A6 — Extend the existing `BoundedStack<T>` class with a
+      `PeekAt(int depth)` method that returns the element at the given
+      depth from the top (0 = top, throws if depth >= Count).
+    workspace: empty-git-repo
+    seed_files:
+      Collections.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Collections</RootNamespace>
+            <AssemblyName>Collections</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      BoundedStack.cs: |
+        namespace Collections;
+
+        public class BoundedStack<T>
+        {
+            private readonly T[] _buf;
+            private int _count;
+
+            public BoundedStack(int capacity)
+            {
+                if (capacity < 0) throw new ArgumentException("capacity must be >= 0");
+                _buf = new T[capacity];
+            }
+
+            public int Count => _count;
+            public bool IsEmpty => _count == 0;
+            public bool IsFull => _count == _buf.Length;
+
+            public void Push(T item)
+            {
+                if (IsFull) throw new InvalidOperationException("stack is full");
+                _buf[_count++] = item;
+            }
+
+            public T Pop()
+            {
+                if (IsEmpty) throw new InvalidOperationException("stack is empty");
+                return _buf[--_count];
+            }
+
+            public T Peek()
+            {
+                if (IsEmpty) throw new InvalidOperationException("stack is empty");
+                return _buf[_count - 1];
+            }
+        }
+      BoundedStack_Tests.cs: |
+        namespace Collections;
+
+        public class BoundedStack_Tests
+        {
+            [Fact] public void PushPop_Lifo()
+            {
+                var s = new BoundedStack<int>(3);
+                s.Push(1); s.Push(2); s.Push(3);
+                Assert.Equal(3, s.Pop()); Assert.Equal(2, s.Pop()); Assert.Equal(1, s.Pop());
+            }
+            [Fact] public void Peek_DoesNotPop()
+            {
+                var s = new BoundedStack<int>(2); s.Push(1); s.Push(2);
+                Assert.Equal(2, s.Peek()); Assert.Equal(2, s.Count);
+            }
+            [Fact] public void Push_WhenFull_Throws()
+            {
+                var s = new BoundedStack<int>(2); s.Push(1); s.Push(2);
+                Assert.ThrowsAny<Exception>(() => s.Push(3));
+            }
+
+            // --- NEW: PeekAt ---
+            [Fact] public void PeekAt_Zero_ReturnsTop()
+            {
+                var s = new BoundedStack<int>(3); s.Push(10); s.Push(20); s.Push(30);
+                Assert.Equal(30, s.PeekAt(0));
+            }
+            [Fact] public void PeekAt_TwoFromTop()
+            {
+                var s = new BoundedStack<int>(3); s.Push(10); s.Push(20); s.Push(30);
+                Assert.Equal(10, s.PeekAt(2));
+            }
+            [Fact] public void PeekAt_OutOfRange_Throws()
+            {
+                var s = new BoundedStack<int>(3); s.Push(10); s.Push(20);
+                Assert.ThrowsAny<Exception>(() => s.PeekAt(5));
+            }
+            [Fact] public void PeekAt_Negative_Throws()
+            {
+                var s = new BoundedStack<int>(3); s.Push(10);
+                Assert.ThrowsAny<Exception>(() => s.PeekAt(-1));
+            }
+        }
+    prompt: |
+      `BoundedStack.cs` exists with Push/Pop/Peek/Count/IsEmpty/IsFull
+      working (3 tests pass). 4 new tests reference a `PeekAt(int depth)`
+      method that doesn't exist.
+
+      Dispatch an implementer to add `T PeekAt(int depth)` to the
+      existing class:
+        - `depth == 0` → top of stack
+        - `depth == 1` → one below top
+        - throws if `depth < 0`
+        - throws if `depth >= Count`
+
+      Keep the existing 3 tests green. One-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: BoundedStack.cs
+        exists: true
+      - file: BoundedStack.cs
+        content_matches: 'PeekAt'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  # ============================================================
+  # mc3 — Make existing Money VO implement IComparable
+  # ============================================================
+  - id: mc3-money-icomparable
+    taxonomy: *a6_tax
+    description: |
+      A6 — Existing `Money` VO works; new requirement is it must
+      implement `IComparable<Money>`. Comparison is by Amount only,
+      and throws if currencies differ (consistent with Add/Subtract).
+    workspace: empty-git-repo
+    seed_files:
+      Money.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Money.cs: |
+        namespace Domain;
+
+        public class Money
+        {
+            public decimal Amount { get; }
+            public string Currency { get; }
+
+            public Money(decimal amount, string currency)
+            {
+                Amount = amount;
+                Currency = currency ?? throw new ArgumentNullException(nameof(currency));
+            }
+
+            public Money Add(Money other)
+            {
+                if (other.Currency != Currency) throw new InvalidOperationException("currency mismatch");
+                return new Money(Amount + other.Amount, Currency);
+            }
+
+            public override bool Equals(object? obj) =>
+                obj is Money m && m.Amount == Amount && m.Currency == Currency;
+            public override int GetHashCode() => HashCode.Combine(Amount, Currency);
+        }
+      Money_Tests.cs: |
+        namespace Domain;
+
+        public class Money_Tests
+        {
+            [Fact] public void Construct_Stores() {
+                var m = new Money(10m, "USD");
+                Assert.Equal(10m, m.Amount); Assert.Equal("USD", m.Currency);
+            }
+            [Fact] public void Add_SameCurrency() {
+                Assert.Equal(15m, new Money(10m, "USD").Add(new Money(5m, "USD")).Amount);
+            }
+            [Fact] public void Add_DifferentCurrency_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Money(10m, "USD").Add(new Money(5m, "EUR")));
+            }
+            [Fact] public void Equals_ByValue() {
+                Assert.Equal(new Money(10m, "USD"), new Money(10m, "USD"));
+            }
+
+            // --- NEW: IComparable<Money> ---
+            [Fact] public void CompareTo_SameCurrency_Less() {
+                Assert.True(new Money(5m, "USD").CompareTo(new Money(10m, "USD")) < 0);
+            }
+            [Fact] public void CompareTo_SameCurrency_Equal() {
+                Assert.Equal(0, new Money(7m, "USD").CompareTo(new Money(7m, "USD")));
+            }
+            [Fact] public void CompareTo_SameCurrency_Greater() {
+                Assert.True(new Money(20m, "USD").CompareTo(new Money(10m, "USD")) > 0);
+            }
+            [Fact] public void CompareTo_DifferentCurrency_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Money(10m, "USD").CompareTo(new Money(10m, "EUR")));
+            }
+        }
+    prompt: |
+      `Money.cs` exists with Amount/Currency/Add/Equals/GetHashCode
+      passing 4 tests. 4 new tests reference `CompareTo(Money)` from
+      `IComparable<Money>` — make Money implement that interface.
+
+      Behavior:
+        - Compare by Amount only (when currencies match)
+        - Throw if currencies differ (consistent with Add)
+        - Standard CompareTo contract: negative / zero / positive
+
+      Keep the existing 4 tests green. One-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: Money.cs
+        exists: true
+      - file: Money.cs
+        content_matches: 'IComparable'
+      - file: Money.cs
+        content_matches: 'CompareTo'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 8
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 16
+
+  # ============================================================
+  # mc4 — Add Length-cap invariant to existing Cart class
+  # ============================================================
+  - id: mc4-cart-max-lines
+    taxonomy: *a6_tax
+    description: |
+      A6 — Existing `Cart` aggregate has AddLine + Lines + Subtotal.
+      New requirement: Cart enforces a max-lines invariant. AddLine
+      throws once Count reaches MaxLines.
+    workspace: empty-git-repo
+    seed_files:
+      Cart.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Cart.cs: |
+        namespace Domain;
+
+        public class Cart
+        {
+            private readonly List<(string Sku, int Qty, decimal Price)> _lines = new();
+
+            public IReadOnlyList<(string Sku, int Qty, decimal Price)> Lines => _lines;
+            public decimal Subtotal => _lines.Sum(l => l.Qty * l.Price);
+
+            public void AddLine(string sku, int qty, decimal price)
+            {
+                if (qty <= 0) throw new ArgumentException("qty must be > 0");
+                _lines.Add((sku, qty, price));
+            }
+        }
+      Cart_Tests.cs: |
+        namespace Domain;
+
+        public class Cart_Tests
+        {
+            [Fact] public void NewCart_Empty() => Assert.Empty(new Cart().Lines);
+            [Fact] public void AddLine_Adds() {
+                var c = new Cart();
+                c.AddLine("A", 2, 5m);
+                Assert.Single(c.Lines);
+            }
+            [Fact] public void Subtotal_Sums() {
+                var c = new Cart();
+                c.AddLine("A", 2, 5m); c.AddLine("B", 1, 10m);
+                Assert.Equal(20m, c.Subtotal);
+            }
+            [Fact] public void AddLine_ZeroQty_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Cart().AddLine("A", 0, 5m));
+            }
+
+            // --- NEW: MaxLines invariant ---
+            [Fact] public void DefaultMaxLines_Is_20()
+                => Assert.Equal(20, new Cart().MaxLines);
+            [Fact] public void Ctor_TakesMaxLines() {
+                var c = new Cart(maxLines: 3);
+                Assert.Equal(3, c.MaxLines);
+            }
+            [Fact] public void AddLine_AtMax_Throws() {
+                var c = new Cart(maxLines: 2);
+                c.AddLine("A", 1, 1m); c.AddLine("B", 1, 1m);
+                Assert.ThrowsAny<Exception>(() => c.AddLine("C", 1, 1m));
+            }
+            [Fact] public void AddLine_BelowMax_Works() {
+                var c = new Cart(maxLines: 3);
+                c.AddLine("A", 1, 1m); c.AddLine("B", 1, 1m);
+                Assert.Equal(2, c.Lines.Count);
+            }
+        }
+    prompt: |
+      `Cart.cs` exists with AddLine, Lines, Subtotal passing 4 tests.
+      4 new tests reference a `MaxLines` property + a constructor that
+      takes `maxLines`.
+
+      Requirements:
+        - Add `public int MaxLines { get; }`
+        - Add a new constructor `Cart(int maxLines)`; the existing
+          parameterless constructor should default to `MaxLines = 20`
+        - `AddLine` throws when `Lines.Count` is already at `MaxLines`
+
+      Keep the existing 4 tests green (parameterless ctor still works,
+      default MaxLines = 20). One-file edit. Accept_dispatch.
+    timeout_seconds: 300
+    assertions:
+      - file: Cart.cs
+        exists: true
+      - file: Cart.cs
+        content_matches: 'MaxLines'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 8
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 16

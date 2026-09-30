@@ -1,0 +1,6 @@
+# vett:tool eslint
+# vett:param path string "Path to lint (file or directory)"
+name: eslint
+description: Run ESLint on the project
+command: "npx eslint {path} --format compact"
+timeout_seconds: 60

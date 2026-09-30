@@ -1,0 +1,291 @@
+name: team-fanout-tier2
+description: |
+  LEADER FAN-OUT — can one leader drive MANY sub-agents at once?
+
+  WHY THIS SUITE EXISTS. A sweep of 61 team-bench runs across 8 suites
+  (2026-08-26, ds-team-flash) was scored for actual fan-out:
+
+      40 of 61 runs dispatched ZERO members
+      21 of 61 dispatched exactly ONE (always "implementer-1")
+      max fan-out across the whole corpus: 1
+
+  Part of that is by design — team-minor-edit-tier1 prompts literally say
+  "do this yourself (no need to dispatch)". But the consequence stands:
+  NO shipped suite ever asks a leader to run several members, so the
+  multi-member path shipped unexercised. AgentLoop.cs:1021-1031 fans tool
+  calls out through Task.WhenAll with no cap, and
+  DispatchFanOutConcurrencyTests proves the worktree layer is clean at
+  N=5 and N=10 — but that is the plumbing, not the leader's behaviour.
+
+  Each instance seeds N mutually independent files needing the identical
+  trivial edit. Independence is the point: there is no ordering
+  constraint, so a leader that serialises is choosing to, and a leader
+  that fans out cannot corrupt anything by doing so.
+
+  The gate is `tool_call: assign_async, success: true, min_count: N`.
+  That knob was added 2026-08-26 for this suite — before it, fan-out
+  could be observed in `member_iterations` but never asserted on, so a
+  run that quietly stopped fanning out still passed.
+
+  ⛔ THE TOOL IS `assign_async`, NOT `dispatch`. The first draft of this
+  suite gated on `tool_call: dispatch` and failed with "no tool_call_end
+  for 'dispatch'" — a confident zero over a vocabulary I guessed rather
+  than enumerated. There is no tool named `dispatch` anywhere in the
+  leader's tool list; the real four are `terminal`, `file_editor`,
+  `assign_async`, and `review_dispatch`. That zero looked exactly like a
+  leader that had refused to fan out, when the leader had in fact issued
+  five perfect `assign_async` calls in one turn. Enumerate the tool names
+  from a session log before gating on one.
+
+  Deliberately NOT asserted: that the dispatches overlap in wall-clock.
+  The event stream carries no start/end timestamps to prove concurrency
+  with, so this suite gates on COUNT only. A leader that dispatches ten
+  members one after another passes. Read the per-member wall-clock in the
+  artifact if you need the concurrency claim -- do not infer it from a
+  green result here.
+
+  Run: vett team-bench team-fanout-tier2 --profile ds-team-flash
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: fan5-bump-five-modules
+    # NOTE: file_count_bucket is NOT shared between these two instances --
+    # fan5 touches 5 files ("2-5"), fan10 touches 10 ("6+"). The first
+    # draft anchored both to one block reading "5+", which is not a member
+    # of the schema's value list at all; TaxonomyValidationTests caught it.
+    taxonomy: &fan_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: Fan-out 5 — five independent modules, one constant bump each
+    workspace: empty-git-repo
+    seed_files:
+      Alpha.cs: |
+        namespace Modules;
+
+        public static class Alpha
+        {
+            public const int SchemaVersion = 1;
+        }
+      Bravo.cs: |
+        namespace Modules;
+
+        public static class Bravo
+        {
+            public const int SchemaVersion = 1;
+        }
+      Charlie.cs: |
+        namespace Modules;
+
+        public static class Charlie
+        {
+            public const int SchemaVersion = 1;
+        }
+      Delta.cs: |
+        namespace Modules;
+
+        public static class Delta
+        {
+            public const int SchemaVersion = 1;
+        }
+      Echo.cs: |
+        namespace Modules;
+
+        public static class Echo
+        {
+            public const int SchemaVersion = 1;
+        }
+    prompt: |
+      The workspace has five independent modules: `Alpha.cs`, `Bravo.cs`,
+      `Charlie.cs`, `Delta.cs`, and `Echo.cs`. Each declares
+      `public const int SchemaVersion = 1;`.
+
+      Bump `SchemaVersion` from `1` to `2` in ALL FIVE files. Change
+      nothing else — not the namespace, the class name, or the formatting.
+
+      These files are completely independent of one another; there is no
+      ordering constraint between them. Dispatch a SEPARATE member for
+      EACH file so the five edits happen in parallel, rather than doing
+      them one at a time yourself. Issue the five `assign_async` calls
+      together in a single turn.
+
+      When every member reports back, accept their work and confirm all
+      five files are updated.
+    timeout_seconds: 1200
+    assertions:
+      - file: Alpha.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: Bravo.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: Charlie.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: Delta.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: Echo.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      # THE FAN-OUT GATE. `success: true` matters -- five dispatches that
+      # all failed would otherwise satisfy a bare count.
+      - tool_call: assign_async
+        success: true
+        min_count: 5
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          leader_iters_max: 40
+          member_iters_max: 15
+
+  - id: fan10-bump-ten-modules
+    # Written out in full rather than merged onto *fan_tax: the loader is a
+    # plain YamlDotNet Deserializer with no MergingParser, so a `<<:` merge
+    # key is NOT expanded -- it would drop the eight dimensions it didn't
+    # override and leave this instance silently under-tagged.
+    taxonomy:
+      file_count_bucket: "6+"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: Fan-out 10 — ten independent modules, one constant bump each
+    workspace: empty-git-repo
+    seed_files:
+      M01.cs: |
+        namespace Modules;
+
+        public static class M01
+        {
+            public const int SchemaVersion = 1;
+        }
+      M02.cs: |
+        namespace Modules;
+
+        public static class M02
+        {
+            public const int SchemaVersion = 1;
+        }
+      M03.cs: |
+        namespace Modules;
+
+        public static class M03
+        {
+            public const int SchemaVersion = 1;
+        }
+      M04.cs: |
+        namespace Modules;
+
+        public static class M04
+        {
+            public const int SchemaVersion = 1;
+        }
+      M05.cs: |
+        namespace Modules;
+
+        public static class M05
+        {
+            public const int SchemaVersion = 1;
+        }
+      M06.cs: |
+        namespace Modules;
+
+        public static class M06
+        {
+            public const int SchemaVersion = 1;
+        }
+      M07.cs: |
+        namespace Modules;
+
+        public static class M07
+        {
+            public const int SchemaVersion = 1;
+        }
+      M08.cs: |
+        namespace Modules;
+
+        public static class M08
+        {
+            public const int SchemaVersion = 1;
+        }
+      M09.cs: |
+        namespace Modules;
+
+        public static class M09
+        {
+            public const int SchemaVersion = 1;
+        }
+      M10.cs: |
+        namespace Modules;
+
+        public static class M10
+        {
+            public const int SchemaVersion = 1;
+        }
+    prompt: |
+      The workspace has ten independent modules, `M01.cs` through
+      `M10.cs`. Each declares `public const int SchemaVersion = 1;`.
+
+      Bump `SchemaVersion` from `1` to `2` in ALL TEN files. Change
+      nothing else.
+
+      The ten files are completely independent; there is no ordering
+      constraint between them. Dispatch a SEPARATE member for EACH file
+      so all ten edits happen in parallel rather than sequentially.
+      Issue the ten `assign_async` calls together in a single turn.
+
+      When every member reports back, accept their work and confirm all
+      ten files are updated.
+    timeout_seconds: 1800
+    assertions:
+      - file: M01.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M02.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M03.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M04.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M05.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M06.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M07.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M08.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M09.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - file: M10.cs
+        exists: true
+        content_matches: 'public const int SchemaVersion = 2;'
+      - tool_call: assign_async
+        success: true
+        min_count: 10
+      - no_event: malformed_tool_call
+        max_count: 5
+      - budget:
+          leader_iters_max: 60
+          member_iters_max: 15

@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "bash_background",
+    "description": "Start a long-running shell command in the background and return immediately with a job id. Output is captured into a buffer the agent can read incrementally via the `monitor` tool.\n\n### When to use\n- Dev / file servers that should keep running while you do other work (`npm run dev`, `python -m http.server`, `node server.js`).\n- Build / test watchers that report progress over time (`npm run watch`, `pytest --watch`).\n- Anything you'd otherwise have to run in the foreground and lose the chat session to.\n\n### When NOT to use\n- Quick one-shot commands — use `terminal` instead. The background overhead is wasted on commands that finish in <1s.\n- Commands that need stdin — background jobs run with stdin closed.\n\n### Lifecycle\n- The job survives until the process exits OR you call `bash_kill <job_id>` OR the chat session ends. On session end every background job is killed.\n- Output (stdout + stderr) is buffered. Use `monitor` to read from the start, or `monitor since_line=N` to read only new lines.\n- stderr lines are tagged with `[stderr] ` in the output buffer so streams can be told apart.\n",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to run. Same shell + cwd as the regular `terminal` tool — runs through git-bash on Windows, /bin/bash on Linux/macOS."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional human-readable label for the job (shown in `bash_jobs` output). Defaults to the auto-generated job id."
+        }
+      },
+      "required": ["command"]
+    }
+  }
+}

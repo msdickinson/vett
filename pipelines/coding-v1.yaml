@@ -1,0 +1,58 @@
+# Example 3-phase pipeline: Plan → Implement → Review
+#
+# Not wired into Coordinator yet (Tier 1.6 work). This file declares the
+# canonical shape pipelines take in the v2 architecture so consumers
+# (TicketForge Web /vett/pipelines page, docs, tests) have something to
+# point at while Tier 1B is in flight.
+#
+# Each phase declares its `kind`. The kind selects the enforced output
+# schema (see Vett.Config.PhaseXxxOutput in src/Vett/Config/Pipeline.cs).
+# `fresh_context: true` on the reviewer is load-bearing per roadmap
+# Tier 1.5 — without it, the reviewer agrees with itself.
+
+name: coding-v1
+description: |
+  Three-phase coding pipeline:
+  1. planner — classify the task, draft a plan, declare confidence
+  2. implementer — execute the plan, emit a diff + self-assessment
+  3. reviewer — fresh-context review of the implementer's artifacts;
+                concerns surface as structured records, not narrative
+
+schema_version: 1
+
+phases:
+  - name: plan
+    kind: planner
+    system_prompt: |
+      Classify the task by its taxonomy dimensions, draft a 3-7 step plan,
+      and declare confidence on correctness/completeness/edge_cases/performance.
+      Do NOT write code yet — you're handing off to the implementer.
+    tools:
+      - file_editor   # read-only viewing during planning
+      - think
+    fresh_context: false
+
+  - name: implement
+    kind: implementer
+    system_prompt: |
+      Execute the planner's plan. Emit a diff + list of artifacts touched.
+      Self-assess concerns honestly — under-reporting concerns wastes the
+      reviewer's time.
+    tools:
+      - file_editor
+      - terminal
+      - think
+    fresh_context: false   # implementer sees planner's artifacts
+
+  - name: review
+    kind: reviewer
+    system_prompt: |
+      You see only the implementer's artifacts (diff, self-assessment).
+      You do NOT see the implementer's transcript. Independently review
+      the change. Surface concerns by severity (low/med/high/blocker).
+      Set `blocking: true` only for issues that must be fixed before
+      ship.
+    tools:
+      - file_editor   # read-only viewing
+      - think
+    fresh_context: true    # load-bearing — independent review requires fresh context

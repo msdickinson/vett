@@ -1,0 +1,365 @@
+name: team-modify-multi-class-tier2
+description: |
+  A7 — Modify Multiple Classes. Coordinated change across 2+ existing
+  classes (the kind of refactor where touching one without the other
+  breaks compilation). Existing tests stay green; new tests verify
+  the coordinated change.
+
+  Augments `team-refactor-tier2` (2 instances) with 3 more.
+
+  Run: vett team-bench team-modify-multi-class-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  # ============================================================
+  # mmc1 — Replace string with Email VO across User + Repo
+  # ============================================================
+  - id: mmc1-extract-email-vo
+    taxonomy: &a7_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A7 — Introduce an `Email` VO and replace `string email` across
+      `User` and `UserRepository`. Existing tests must adapt or break;
+      the new tests verify the VO enforces basic validity.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      User.cs: |
+        namespace Domain;
+
+        public class User
+        {
+            public string Name { get; }
+            public Email Email { get; }
+            public User(string name, Email email)
+            {
+                Name = name ?? throw new ArgumentNullException(nameof(name));
+                Email = email ?? throw new ArgumentNullException(nameof(email));
+            }
+        }
+      UserRepository.cs: |
+        namespace Domain;
+
+        public class UserRepository
+        {
+            private readonly Dictionary<string, User> _byEmail = new();
+            public void Add(User u) => _byEmail[u.Email.Value] = u;
+            public User? FindByEmail(Email e) => _byEmail.TryGetValue(e.Value, out var u) ? u : null;
+            public int Count => _byEmail.Count;
+        }
+      User_Tests.cs: |
+        namespace Domain;
+
+        public class User_Tests
+        {
+            [Fact] public void Email_Stored()
+            {
+                var u = new User("Ada", new Email("ada@example.com"));
+                Assert.Equal("ada@example.com", u.Email.Value);
+            }
+            [Fact] public void Repo_FindByEmail()
+            {
+                var repo = new UserRepository();
+                var u = new User("Ada", new Email("ada@example.com"));
+                repo.Add(u);
+                Assert.Same(u, repo.FindByEmail(new Email("ada@example.com")));
+            }
+            [Fact] public void Email_Invalid_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Email("no-at-sign"));
+            }
+            [Fact] public void Email_Null_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Email(null!));
+            }
+            [Fact] public void Email_Empty_Throws() {
+                Assert.ThrowsAny<Exception>(() => new Email(""));
+            }
+            [Fact] public void Email_Equality_ByValue() {
+                Assert.Equal(new Email("a@b"), new Email("a@b"));
+            }
+        }
+    prompt: |
+      The workspace has `User.cs` + `UserRepository.cs` that reference
+      an `Email` type which DOESN'T EXIST YET. 6 tests are red.
+
+      Dispatch an implementer to:
+        1. Create `Email.cs` — a value object with a `Value` property,
+           a constructor that throws on null/empty/no-@-sign, and
+           value-equality (Equals + GetHashCode).
+        2. Verify User.cs and UserRepository.cs compile and the 6 tests
+           pass (User already uses `Email` correctly — don't change that
+           file unless needed).
+
+      Three files (Email.cs + User.cs unchanged + UserRepository.cs
+      unchanged) — but the change is genuinely coordinated: the Email
+      type's API must match what User and UserRepository already
+      assume. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: Email.cs
+        exists: true
+      - file: User.cs
+        exists: true
+      - file: UserRepository.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 6
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  # ============================================================
+  # mmc2 — Rename method across caller + callee
+  # ============================================================
+  - id: mmc2-rename-across-callers
+    taxonomy: *a7_tax
+    description: |
+      A7 — `Calculator.Compute` should be renamed to `Calculator.Evaluate`.
+      Three caller classes use it; all must be updated. The interface
+      method also renames. Existing 5 tests must pass after rename.
+    workspace: empty-git-repo
+    seed_files:
+      Calc.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Calc</RootNamespace>
+            <AssemblyName>Calc</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      ICalculator.cs: |
+        namespace Calc;
+
+        public interface ICalculator
+        {
+            int Compute(int a, int b);
+        }
+      Calculator.cs: |
+        namespace Calc;
+
+        public class Calculator : ICalculator
+        {
+            public int Compute(int a, int b) => a + b;
+        }
+      OrderTotal.cs: |
+        namespace Calc;
+
+        public class OrderTotal
+        {
+            private readonly ICalculator _c;
+            public OrderTotal(ICalculator c) => _c = c;
+            public int For(int line1, int line2) => _c.Compute(line1, line2);
+        }
+      Reports.cs: |
+        namespace Calc;
+
+        public class Reports
+        {
+            public int Sum(ICalculator c, int x, int y) => c.Compute(x, y);
+        }
+      Calc_Tests.cs: |
+        namespace Calc;
+
+        public class Calc_Tests
+        {
+            // All tests use the NEW name "Evaluate". Today they don't compile —
+            // the agent must rename the interface + impl + 2 caller sites.
+            [Fact] public void Evaluate_Adds() => Assert.Equal(5, new Calculator().Evaluate(2, 3));
+            [Fact] public void Interface_HasEvaluate()
+            {
+                ICalculator c = new Calculator();
+                Assert.Equal(7, c.Evaluate(3, 4));
+            }
+            [Fact] public void OrderTotal_UsesEvaluate()
+                => Assert.Equal(9, new OrderTotal(new Calculator()).For(4, 5));
+            [Fact] public void Reports_UsesEvaluate()
+                => Assert.Equal(12, new Reports().Sum(new Calculator(), 5, 7));
+            [Fact] public void OldName_Compute_Removed()
+            {
+                // Sanity: no method called "Compute" remains on the interface.
+                var t = typeof(ICalculator);
+                Assert.Null(t.GetMethod("Compute"));
+            }
+        }
+    prompt: |
+      `Calc_Tests.cs` references a method `Evaluate` on `ICalculator` /
+      `Calculator` / `OrderTotal` / `Reports`. The source code today has
+      `Compute` instead. Tests are red.
+
+      Dispatch an implementer to rename `Compute` → `Evaluate` across
+      ALL FOUR FILES:
+        - `ICalculator.cs` (interface)
+        - `Calculator.cs` (implementation)
+        - `OrderTotal.cs` (caller)
+        - `Reports.cs` (caller)
+
+      Don't leave any `Compute` method behind on the interface (the
+      last test verifies this). Coordinated edit. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: ICalculator.cs
+        content_matches: 'Evaluate'
+      - file: Calculator.cs
+        content_matches: 'Evaluate'
+      - file: OrderTotal.cs
+        content_matches: 'Evaluate'
+      - file: Reports.cs
+        content_matches: 'Evaluate'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 5
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18
+
+  # ============================================================
+  # mmc3 — Push field down: move PaymentMethod from Order to PaymentInfo
+  # ============================================================
+  - id: mmc3-move-field
+    taxonomy: *a7_tax
+    description: |
+      A7 — Existing `Order` has a `string PaymentMethod` field. New
+      structure: extract into a dedicated `PaymentInfo` value object
+      that holds Method + ProcessedAt. Order references PaymentInfo.
+    workspace: empty-git-repo
+    seed_files:
+      Domain.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Order.cs: |
+        namespace Domain;
+
+        public class Order
+        {
+            public int Id { get; }
+            // Today: payment is a single string. Will move into PaymentInfo.
+            public string PaymentMethod { get; private set; } = "";
+
+            public Order(int id) => Id = id;
+
+            public void Pay(string method) => PaymentMethod = method;
+        }
+      Order_Tests.cs: |
+        namespace Domain;
+
+        public class Order_Tests
+        {
+            // NEW shape: Order.Payment is a PaymentInfo with Method + ProcessedAt.
+            [Fact] public void NoPayment_Initially()
+                => Assert.Null(new Order(1).Payment);
+
+            [Fact] public void Pay_StoresMethodAndTimestamp()
+            {
+                var o = new Order(1);
+                o.Pay("visa", new DateTime(2026, 5, 12, 14, 0, 0, DateTimeKind.Utc));
+                Assert.NotNull(o.Payment);
+                Assert.Equal("visa", o.Payment!.Method);
+                Assert.Equal(2026, o.Payment!.ProcessedAt.Year);
+            }
+
+            [Fact] public void Pay_Twice_Overwrites()
+            {
+                var o = new Order(1);
+                o.Pay("visa", DateTime.UtcNow);
+                o.Pay("mastercard", DateTime.UtcNow);
+                Assert.Equal("mastercard", o.Payment!.Method);
+            }
+
+            [Fact] public void PaymentInfo_HasMethod_AndTimestamp()
+            {
+                var pi = new PaymentInfo("amex", new DateTime(2025, 1, 1));
+                Assert.Equal("amex", pi.Method);
+                Assert.Equal(2025, pi.ProcessedAt.Year);
+            }
+
+            [Fact] public void PaymentInfo_NullMethod_Throws()
+                => Assert.ThrowsAny<Exception>(() => new PaymentInfo(null!, DateTime.UtcNow));
+        }
+    prompt: |
+      Today `Order.cs` has a `string PaymentMethod` and a `Pay(string)`
+      method. The tests expect a richer structure:
+        - New file `PaymentInfo.cs`: VO with `Method` (string, non-null)
+          and `ProcessedAt` (DateTime) properties; constructor throws
+          on null method.
+        - `Order.PaymentMethod` REPLACED by `Order.Payment` of type
+          `PaymentInfo?` (null until paid).
+        - `Order.Pay(string method, DateTime processedAt)` replaces
+          the old single-string version.
+
+      Two-file edit (Order.cs modified + new PaymentInfo.cs). 5 tests
+      should pass. Accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - file: Order.cs
+        exists: true
+      - file: PaymentInfo.cs
+        exists: true
+      - file: Order.cs
+        content_matches: 'PaymentInfo'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 5
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 22
+          leader_iters_max: 18

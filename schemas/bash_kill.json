@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "bash_kill",
+    "description": "Terminate a running background job started via `bash_background`. Idempotent — calling on an already-finished job is a no-op. The job's output buffer is preserved so a final `monitor` call can read whatever was printed before the kill.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "description": "The job id returned by `bash_background`."
+        }
+      },
+      "required": ["job_id"]
+    }
+  }
+}

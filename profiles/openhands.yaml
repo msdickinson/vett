@@ -1,0 +1,58 @@
+name: openhands
+description: |
+  Mirror of openhands-sdk V1 for the qwen3-coder-next baseline. The system
+  prompt is byte-identical (verified 2026-04-26 against SDK 1.14.0). Tool
+  schemas and tool implementations match OpenHands defaults except where
+  noted in docs/openhands-fidelity.md. Notable
+  drifts still standing: no LLMSummarizingCondenser, no AgentFinishedCritic,
+  no terminal soft-timeout / is_input semantics. This profile is for "matches
+  OpenHands within stated bounds", not "indistinguishable at the wire level".
+
+sandbox:
+  run_as_root: true
+  home: /tmp
+  default_cwd: /testbed
+
+llm:
+  temperature: 1.0
+  # top_p intentionally unset: OpenHands run2 metadata shows top_p=null
+  # (vLLM default 1.0). Setting top_p=0.95 here would tighten the nucleus
+  # vs. the reference run.
+  request_timeout_seconds: 300
+  num_retries: 5
+
+# 12,103-byte V1 system prompt, byte-identical to OpenHands SDK 1.14.0
+# render with model_family=alibaba_qwen, llm_security_analyzer=True.
+system_prompt_file: ../testdata/ref-system-prompt.txt
+
+# SWE-bench user template — phased prompt ported from openhands-sdk V1
+# (benchmarks/swebench/prompts/default.j2). Substitution placeholders
+# {working_dir}, {base_commit}, {problem_statement} are filled by the
+# suite runner.
+user_template_file: ../testdata/ref-swebench-user-template.txt
+
+tools:
+  - terminal
+  - file_editor
+  - task_tracker
+  - finish
+  - think
+
+middleware:
+  - output_truncation
+  - submit_detector
+  - stuck_detector
+
+# Official OpenHands SWE-bench default. Verified by grepping the actual
+# benchmarks repo on the runner box:
+#   benchmarks/utils/args_parser.py: --max-iterations default=500
+#   benchmarks/swebench/config.py INFER_DEFAULTS: doesn't override
+#   benchmarks/swebench/run_infer.py:381: parser.set_defaults(**INFER_DEFAULTS)
+# So `python -m benchmarks.swebench.run_infer ...` with no flag gets 500.
+# (Mark's prior personal runs used 30/100/300 — those were explicit overrides
+# for throughput, not the default.)
+max_iterations: 500
+# timeout_minutes is documentation-only — VETT's runtime never reads it.
+# OpenHands has no per-instance wall-clock cap; the iteration budget is the
+# real cap. Set generously so it never matters.
+timeout_minutes: 240

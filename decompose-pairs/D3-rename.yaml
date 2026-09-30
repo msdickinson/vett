@@ -1,0 +1,15 @@
+name: D3-rename
+description: |
+  Monolithic A7 "rename Compute → Evaluate across 4 files" vs
+  decomposed A6 (rename interface + impl) + A5 (update OrderTotal)
+  + A5 (update Reports). Tests whether splitting a cross-file rename
+  into "shape change" then "caller updates" works.
+
+monolith:
+  suite: team-decompose-pairs-d3
+  instance: D3-monolith-rename
+
+decomposed:
+  - { suite: team-decompose-pairs-d3, instance: D3-step1-shape-change }
+  - { suite: team-decompose-pairs-d3, instance: D3-step2-update-ordertotal }
+  - { suite: team-decompose-pairs-d3, instance: D3-step3-update-reports }

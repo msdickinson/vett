@@ -1,0 +1,221 @@
+name: team-decompose-pairs-d3
+description: |
+  D3 — Cross-file rename refactor. Monolith A7 "rename Compute → Evaluate
+  across interface + impl + 2 callers" vs decomposed A6 (rename interface
+  + impl together) + A5 (rename in caller 1) + A5 (rename in caller 2).
+
+  Tests whether splitting a coordinated rename into "shape change" then
+  "caller updates" lifts pass rate.
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: D3-monolith-rename
+    taxonomy: &complex_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      A7 — Rename `Compute → Evaluate` across `ICalculator`, `Calculator`,
+      `OrderTotal`, `Reports` in one shot.
+    workspace: empty-git-repo
+    seed_files:
+      Calc.csproj: &calc_csproj |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Calc</RootNamespace>
+            <AssemblyName>Calc</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      ICalculator.cs: &icalc_cs |
+        namespace Calc;
+        public interface ICalculator { int Compute(int a, int b); }
+      Calculator.cs: &calc_cs |
+        namespace Calc;
+        public class Calculator : ICalculator { public int Compute(int a, int b) => a + b; }
+      OrderTotal.cs: &order_total_cs |
+        namespace Calc;
+        public class OrderTotal
+        {
+            private readonly ICalculator _c;
+            public OrderTotal(ICalculator c) => _c = c;
+            public int For(int line1, int line2) => _c.Compute(line1, line2);
+        }
+      Reports.cs: &reports_cs |
+        namespace Calc;
+        public class Reports
+        {
+            public int Sum(ICalculator c, int x, int y) => c.Compute(x, y);
+        }
+      Calc_Tests.cs: &calc_tests |
+        namespace Calc;
+        public class Calc_Tests
+        {
+            [Fact] public void Evaluate_Adds() => Assert.Equal(5, new Calculator().Evaluate(2, 3));
+            [Fact] public void Interface_HasEvaluate()
+            {
+                ICalculator c = new Calculator();
+                Assert.Equal(7, c.Evaluate(3, 4));
+            }
+            [Fact] public void OrderTotal_UsesEvaluate()
+                => Assert.Equal(9, new OrderTotal(new Calculator()).For(4, 5));
+            [Fact] public void Reports_UsesEvaluate()
+                => Assert.Equal(12, new Reports().Sum(new Calculator(), 5, 7));
+            [Fact] public void OldName_Removed()
+            {
+                Assert.Null(typeof(ICalculator).GetMethod("Compute"));
+            }
+        }
+    prompt: |
+      `ICalculator`, `Calculator`, `OrderTotal`, `Reports` all use a
+      method named `Compute`. The test fixture references `Evaluate`
+      instead — all 5 tests are red.
+
+      Dispatch an implementer to rename `Compute → Evaluate` across
+      all 4 files in one shot:
+        - `ICalculator.cs` interface method
+        - `Calculator.cs` implementation
+        - `OrderTotal.cs` caller
+        - `Reports.cs` caller
+
+      No `Compute` left on the interface. All 5 tests turn green.
+      Accept_dispatch.
+    timeout_seconds: 360
+    assertions: &d3_assertions
+      - file: ICalculator.cs
+        content_matches: 'Evaluate'
+      - file: Calculator.cs
+        content_matches: 'Evaluate'
+      - file: OrderTotal.cs
+        content_matches: 'Evaluate'
+      - file: Reports.cs
+        content_matches: 'Evaluate'
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 5
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 14
+
+  - id: D3-step1-shape-change
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: A6 — Rename in interface + impl together (paired shape change)
+    workspace: empty-git-repo
+    seed_files:
+      Calc.csproj: *calc_csproj
+      ICalculator.cs: *icalc_cs
+      Calculator.cs: *calc_cs
+      OrderTotal.cs: *order_total_cs
+      Reports.cs: *reports_cs
+      Calc_Tests.cs: *calc_tests
+    prompt: |
+      Step 1 of 3. Dispatch an implementer to rename ONLY in two files:
+        - `ICalculator.cs` — interface method `Compute` → `Evaluate`
+        - `Calculator.cs` — implementation `Compute` → `Evaluate`
+
+      Do NOT touch `OrderTotal.cs` or `Reports.cs` yet — those are
+      next steps. After this step, the caller files won't compile
+      (they still reference the old name). That's expected — don't
+      try to fix them. Accept_dispatch when the rename in the two
+      target files is done.
+    timeout_seconds: 240
+    assertions:
+      - file: ICalculator.cs
+        content_matches: 'Evaluate'
+      - file: Calculator.cs
+        content_matches: 'Evaluate'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 10
+          leader_iters_max: 8
+
+  - id: D3-step2-update-ordertotal
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: A5 — Update OrderTotal caller after interface rename
+    workspace: empty-git-repo
+    seed_files:
+      Calc.csproj: *calc_csproj
+      ICalculator.cs: *icalc_cs
+      Calculator.cs: *calc_cs
+      OrderTotal.cs: *order_total_cs
+      Reports.cs: *reports_cs
+      Calc_Tests.cs: *calc_tests
+    prompt: |
+      Step 2 of 3. The interface + implementation now use `Evaluate`
+      instead of `Compute` (done in step 1). `OrderTotal.cs` still
+      calls the old name and won't compile.
+
+      Dispatch an implementer to update ONLY `OrderTotal.cs`: change
+      its `_c.Compute(...)` call to `_c.Evaluate(...)`. Don't touch
+      Reports.cs — that's the next step.
+    timeout_seconds: 240
+    assertions:
+      - file: OrderTotal.cs
+        content_matches: 'Evaluate'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 8
+          leader_iters_max: 6
+
+  - id: D3-step3-update-reports
+    taxonomy: *complex_tax
+    description: A5 — Update Reports caller + final-state assertions
+    workspace: empty-git-repo
+    seed_files:
+      Calc.csproj: *calc_csproj
+      ICalculator.cs: *icalc_cs
+      Calculator.cs: *calc_cs
+      OrderTotal.cs: *order_total_cs
+      Reports.cs: *reports_cs
+      Calc_Tests.cs: *calc_tests
+    prompt: |
+      Step 3 of 3. ICalculator/Calculator/OrderTotal all use `Evaluate`
+      now. `Reports.cs` is the last file still calling the old name.
+
+      Dispatch an implementer to update `Reports.cs`: change
+      `c.Compute(...)` to `c.Evaluate(...)`. After this step all 5
+      tests should pass. Accept_dispatch.
+    timeout_seconds: 360
+    # Same end-state assertions as the monolith.
+    assertions: *d3_assertions

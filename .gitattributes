@@ -1,0 +1,72 @@
+# Byte-exact reference fixtures.
+#
+# These two files are VERBATIM copies of OpenHands SDK 1.14.0 artifacts, and
+# their LENGTH IN BYTES IS THE ASSERTION:
+#
+#   OpenHandsProfileSmokeTests.RefSystemPrompt_DeployedAndUnchanged
+#       Assert.Equal(12103, new FileInfo(path).Length)
+#   OpenHandsProfileSmokeTests.OpenHandsProfile_LoadsAllFileReferences
+#       Assert.Equal(12099, profile.SystemPrompt.Length)   // UTF-16 code units
+#
+# With no .gitattributes and core.autocrlf=true (the Windows default, set on
+# this machine), git rewrites the 164 LFs to CRLF ON CHECKOUT. A tree that
+# predates the conversion keeps its LF copy forever, because git does not
+# renormalize files already in the working tree -- so those tests pass here and
+# FAIL IN EVERY FRESH CLONE, at 12267 bytes / 12263 code units. That was
+# verified, not inferred: a clean clone of 6930de2 carried exactly 164 CR bytes
+# and 12267 bytes, and the content was byte-identical after stripping CR.
+#
+# -text pins them so every checkout gets the bytes that were committed. It is
+# the right treatment for a fixture whose whole job is to be byte-identical to
+# something upstream; normalizing it would silently redefine the thing the
+# assertion is measuring.
+#
+# NOT a gate lowered to match reality: the assertion is unchanged at 12103.
+# What changed is that the checkout now delivers the committed bytes.
+ref-system-prompt.txt          -text
+ref-swebench-user-template.txt -text
+
+# ---------------------------------------------------------------------------
+# Config stores must be BYTE-IDENTICAL across checkouts, because vett compares
+# them to each other and warns on divergence.
+#
+# `vett validate` on 10200b4 reported 11 x "DIVERGENT copies in 2 stores"
+# (ds-solo-pro, ds-team-pro, openhands, the ds-manager-* width profiles,
+# spec-authoring-*). Every one of them was EOL-ONLY: each pair was byte-
+# identical after stripping CR, and the size delta equalled the CR count
+# exactly (ds-solo-pro 137, ds-team-pro 438, openhands 58,
+# ds-manager-flash-w10 2912). Cause is the same core.autocrlf mechanism the
+# fixtures above hit -- the package was built from a FRESH CLONE, which checks
+# these out as CRLF, while the long-lived working tree still holds LF. Content
+# never drifted.
+#
+# That is worse than cosmetic: a divergence detector with 11 standing false
+# positives is how a REAL config drift gets ignored. Pinning eol=lf makes every
+# checkout agree with the committed blob, so a future warning means content.
+#
+# Verified safe before committing: `git ls-files --eol` reports ZERO i/crlf or
+# i/mixed blobs under any path pinned below (repo-wide the ONLY i/crlf blobs are
+# the 12 under projects/realmscape/ and the 2 suites files named just below), so
+# eol=lf rewrites no committed bytes.
+# suites/ is deliberately EXCLUDED -- team-api-migration-tier3.yaml and
+# team-feature-end-to-end-tier4.yaml genuinely have CRLF blobs, and normalizing
+# them would rewrite bytes nobody asked me to touch.
+# ONE MORE CONSTRAINT, learned the hard way: the pinned set under defaults/ must
+# EXACTLY MIRROR the pinned set at the root. A first cut of this file pinned
+# `defaults/**` wholesale, which silently broke
+# ProfileCompactionTests.Every_defaults_file_is_byte_identical_to_its_repo_twin:
+# defaults/suites/*.yaml and defaults/testdata/fixtures/canned-instances.jsonl
+# went LF while their root twins -- which are NOT pinned -- stayed CRLF, so 3
+# pairs that had always been byte-identical started to differ (delta 16/19/2,
+# each equal to the CR count exactly). A rule that straddles a byte-identity
+# gate breaks it. That test is the guard for this invariant: if you pin a new
+# root path, pin defaults/<path> in the same commit, and vice versa.
+#
+# The two `-text` lines above need no mirror -- they are BARE FILENAME patterns,
+# so they already match at any depth, including defaults/testdata/.
+profiles/**                 text eol=lf
+bench-profiles/**           text eol=lf
+schemas/**                  text eol=lf
+defaults/profiles/**        text eol=lf
+defaults/bench-profiles/**  text eol=lf
+defaults/schemas/**         text eol=lf

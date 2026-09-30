@@ -1,0 +1,19 @@
+name: test-canned
+description: |
+  Tiny fixture suite used by unit tests and end-to-end smoke runs. Two
+  canned instances in testdata/fixtures/canned-instances.jsonl. Not a
+  real benchmark — the scorer is pass_fail.
+
+loader:
+  type: jsonl
+  path: ../testdata/fixtures/canned-instances.jsonl
+
+rendering:
+  working_dir: /workspace
+  docker_image_template: vett-test:{instance}
+
+sandbox:
+  docker_image: vett-test
+
+scorer:
+  type: pass_fail

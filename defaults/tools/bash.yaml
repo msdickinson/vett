@@ -1,0 +1,6 @@
+# vett:tool bash
+# vett:param command string "The bash command to run"
+name: bash
+description: Run a bash command
+command: "{command}"
+timeout_seconds: 60

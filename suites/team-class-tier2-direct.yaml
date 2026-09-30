@@ -1,0 +1,471 @@
+name: team-class-tier2-direct
+description: |
+  A3 Implement-Class — direct variant (no dispatch). Same instances as
+  team-class-tier2 but the leader is told to do the work itself with
+  file_editor. Removes the dispatch worktree drift confound observed
+  on team-method-tier1 (6/8 fails were dispatch issues, not model).
+
+  Tier 2: implement a single C# class with multiple interacting methods.
+  This is the next step up from team-method-tier1 (one static method on
+  Methods class). Each instance asks the agent to design a real class
+  with constructors, invariants, value semantics, and exception
+  contracts — DDD-shape building blocks (Value Objects, Bounded
+  collections, Quantity types).
+
+  Verified by `dotnet test` against a seeded test project. Pure
+  deterministic — no LLM judge.
+
+  Run: vett team-bench team-class-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: c1-money-vo
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Implement Money — a classic DDD Value Object with arithmetic +
+      currency-mismatch invariant + value-semantics Equals/GetHashCode.
+    workspace: empty-git-repo
+    seed_files:
+      Money.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Domain</RootNamespace>
+            <AssemblyName>Domain</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Money_Tests.cs: |
+        namespace Domain;
+
+        public class Money_Tests
+        {
+            [Fact]
+            public void Construct_StoresAmountAndCurrency()
+            {
+                var m = new Money(10.50m, "USD");
+                Assert.Equal(10.50m, m.Amount);
+                Assert.Equal("USD", m.Currency);
+            }
+
+            [Theory]
+            [InlineData(1, 2, 3)]
+            [InlineData(0, 0, 0)]
+            [InlineData(10, -3, 7)]
+            [InlineData(1.5, 2.25, 3.75)]
+            public void Add_SameCurrency_ReturnsSum(decimal a, decimal b, decimal expected)
+            {
+                var sum = new Money(a, "USD").Add(new Money(b, "USD"));
+                Assert.Equal(expected, sum.Amount);
+                Assert.Equal("USD", sum.Currency);
+            }
+
+            [Theory]
+            [InlineData(10, 3, 7)]
+            [InlineData(0, 5, -5)]
+            [InlineData(2.5, 1.25, 1.25)]
+            public void Subtract_SameCurrency_ReturnsDifference(decimal a, decimal b, decimal expected)
+            {
+                var diff = new Money(a, "USD").Subtract(new Money(b, "USD"));
+                Assert.Equal(expected, diff.Amount);
+            }
+
+            [Fact]
+            public void Add_DifferentCurrency_Throws()
+            {
+                var usd = new Money(10, "USD");
+                var eur = new Money(5, "EUR");
+                Assert.ThrowsAny<Exception>(() => usd.Add(eur));
+            }
+
+            [Fact]
+            public void Subtract_DifferentCurrency_Throws()
+            {
+                var usd = new Money(10, "USD");
+                var eur = new Money(5, "EUR");
+                Assert.ThrowsAny<Exception>(() => usd.Subtract(eur));
+            }
+
+            [Fact]
+            public void Equals_SameAmountAndCurrency_True()
+            {
+                var a = new Money(10.50m, "USD");
+                var b = new Money(10.50m, "USD");
+                Assert.True(a.Equals(b));
+                Assert.True(a.Equals((object)b));
+            }
+
+            [Fact]
+            public void Equals_DifferentAmount_False()
+            {
+                Assert.False(new Money(10, "USD").Equals(new Money(11, "USD")));
+            }
+
+            [Fact]
+            public void Equals_DifferentCurrency_False()
+            {
+                Assert.False(new Money(10, "USD").Equals(new Money(10, "EUR")));
+            }
+
+            [Fact]
+            public void GetHashCode_EqualValues_SameHash()
+            {
+                var a = new Money(10, "USD");
+                var b = new Money(10, "USD");
+                Assert.Equal(a.GetHashCode(), b.GetHashCode());
+            }
+
+            [Fact]
+            public void ToString_ReturnsAmountAndCurrency()
+            {
+                var s = new Money(10.50m, "USD").ToString();
+                Assert.Contains("10.5", s);
+                Assert.Contains("USD", s);
+            }
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single class, single file.
+
+      Create `Money.cs` in the workspace root containing a public
+      class `Money` in the `Domain` namespace, with:
+
+        - public decimal Amount { get; }       (init via ctor)
+        - public string  Currency { get; }     (init via ctor)
+        - public Money(decimal amount, string currency)
+        - public Money Add(Money other)        — returns NEW Money;
+            throws an exception (any kind) if currencies differ.
+        - public Money Subtract(Money other)   — same currency rule.
+        - override bool Equals(object? other)  — value semantics:
+            equal iff same Amount AND same Currency.
+        - override int  GetHashCode()          — must produce equal
+            hashes for equal values.
+        - override string ToString()           — must contain both
+            the amount and the currency in any reasonable format.
+
+      DO NOT run `dotnet test` yourself — just create Money.cs and
+      report done; the bench harness verifies. Seeded `Money_Tests.cs`
+      has 13 cases; all must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Money.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 13
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 16
+
+  - id: c2-bounded-stack
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Implement BoundedStack<T> — generic stack with capacity ceiling +
+      empty/full invariants. Tests Push/Pop/Peek/Count and the boundary
+      exceptions.
+    workspace: empty-git-repo
+    seed_files:
+      Stack.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Collections</RootNamespace>
+            <AssemblyName>Collections</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      BoundedStack_Tests.cs: |
+        namespace Collections;
+
+        public class BoundedStack_Tests
+        {
+            [Fact]
+            public void New_IsEmpty_CountZero()
+            {
+                var s = new BoundedStack<int>(3);
+                Assert.True(s.IsEmpty);
+                Assert.False(s.IsFull);
+                Assert.Equal(0, s.Count);
+            }
+
+            [Fact]
+            public void PushPop_LIFO()
+            {
+                var s = new BoundedStack<int>(3);
+                s.Push(1); s.Push(2); s.Push(3);
+                Assert.Equal(3, s.Count);
+                Assert.True(s.IsFull);
+                Assert.Equal(3, s.Pop());
+                Assert.Equal(2, s.Pop());
+                Assert.Equal(1, s.Pop());
+                Assert.True(s.IsEmpty);
+            }
+
+            [Fact]
+            public void Peek_ReturnsTop_DoesNotPop()
+            {
+                var s = new BoundedStack<string>(2);
+                s.Push("a"); s.Push("b");
+                Assert.Equal("b", s.Peek());
+                Assert.Equal(2, s.Count);
+                Assert.Equal("b", s.Pop());
+            }
+
+            [Fact]
+            public void Push_WhenFull_Throws()
+            {
+                var s = new BoundedStack<int>(2);
+                s.Push(1); s.Push(2);
+                Assert.ThrowsAny<Exception>(() => s.Push(3));
+            }
+
+            [Fact]
+            public void Pop_WhenEmpty_Throws()
+            {
+                var s = new BoundedStack<int>(2);
+                Assert.ThrowsAny<Exception>(() => s.Pop());
+            }
+
+            [Fact]
+            public void Peek_WhenEmpty_Throws()
+            {
+                var s = new BoundedStack<int>(2);
+                Assert.ThrowsAny<Exception>(() => s.Peek());
+            }
+
+            [Fact]
+            public void Capacity_Zero_AlwaysFullAlwaysEmpty()
+            {
+                var s = new BoundedStack<int>(0);
+                Assert.True(s.IsEmpty);
+                Assert.True(s.IsFull);
+                Assert.ThrowsAny<Exception>(() => s.Push(1));
+                Assert.ThrowsAny<Exception>(() => s.Pop());
+            }
+
+            [Fact]
+            public void NegativeCapacity_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => new BoundedStack<int>(-1));
+            }
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single class, single file.
+
+      Create `BoundedStack.cs` in the workspace root containing a
+      public generic class `BoundedStack<T>` in the `Collections`
+      namespace, with:
+
+        - public BoundedStack(int capacity) — throws if capacity < 0
+        - public int  Count    { get; }
+        - public bool IsEmpty  { get; }
+        - public bool IsFull   { get; }
+        - public void Push(T item)  — throws when IsFull
+        - public T    Pop()         — throws when IsEmpty; LIFO order
+        - public T    Peek()        — throws when IsEmpty; does NOT pop
+
+      Edge cases:
+        - capacity == 0 means the stack is BOTH empty AND full
+          (IsEmpty=true, IsFull=true). Push and Pop both throw.
+        - negative capacity is rejected at construction.
+
+      DO NOT run `dotnet test` yourself — just create BoundedStack.cs
+      and report done; the bench harness verifies. Seeded
+      `BoundedStack_Tests.cs` has 8 cases; all must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: BoundedStack.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 8
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 16
+
+  - id: c3-temperature
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Implement Temperature — a unit-conversion VO with multiple
+      static factory methods (FromCelsius/FromFahrenheit), a Kelvin
+      invariant (no negative absolute), and IComparable.
+    workspace: empty-git-repo
+    seed_files:
+      Temp.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Units</RootNamespace>
+            <AssemblyName>Units</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Temperature_Tests.cs: |
+        namespace Units;
+
+        public class Temperature_Tests
+        {
+            [Theory]
+            [InlineData(0, -273.15)]
+            [InlineData(273.15, 0)]
+            [InlineData(373.15, 100)]
+            public void FromKelvin_ToCelsius(double kelvin, double celsius)
+            {
+                var t = new Temperature(kelvin);
+                Assert.Equal(celsius, t.Celsius, 2);
+            }
+
+            [Theory]
+            [InlineData(0, 273.15)]
+            [InlineData(100, 373.15)]
+            [InlineData(-40, 233.15)]
+            public void FromCelsius_ToKelvin(double celsius, double kelvin)
+            {
+                var t = Temperature.FromCelsius(celsius);
+                Assert.Equal(kelvin, t.Kelvin, 2);
+            }
+
+            [Theory]
+            [InlineData(32, 0)]    // freezing
+            [InlineData(212, 100)] // boiling
+            [InlineData(-40, -40)] // F == C crossover
+            public void FromFahrenheit_ToCelsius(double f, double c)
+            {
+                var t = Temperature.FromFahrenheit(f);
+                Assert.Equal(c, t.Celsius, 2);
+            }
+
+            [Theory]
+            [InlineData(0, 32)]
+            [InlineData(100, 212)]
+            public void Celsius_ToFahrenheit(double c, double f)
+            {
+                Assert.Equal(f, Temperature.FromCelsius(c).Fahrenheit, 2);
+            }
+
+            [Fact]
+            public void NegativeKelvin_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => new Temperature(-1));
+            }
+
+            [Fact]
+            public void BelowAbsoluteZero_Celsius_Throws()
+            {
+                Assert.ThrowsAny<Exception>(() => Temperature.FromCelsius(-274));
+            }
+
+            [Fact]
+            public void Compare_HigherKelvin_GreaterThan()
+            {
+                var cold = new Temperature(100);
+                var hot  = new Temperature(500);
+                Assert.True(cold.CompareTo(hot) < 0);
+                Assert.True(hot.CompareTo(cold) > 0);
+                Assert.Equal(0, cold.CompareTo(new Temperature(100)));
+            }
+        }
+    prompt: |
+      Implement the following directly yourself using `file_editor` —
+      do NOT call `assign_task`. Single class, single file.
+
+      Create `Temperature.cs` in the workspace root containing a
+      public class `Temperature` in the `Units` namespace,
+      implementing `IComparable<Temperature>`, with:
+
+        - public double Kelvin     { get; }
+        - public double Celsius    { get; }   (derived: K - 273.15)
+        - public double Fahrenheit { get; }   (derived: C * 9/5 + 32)
+
+        - public Temperature(double kelvin)   — throws when kelvin < 0
+        - public static Temperature FromCelsius(double celsius)
+            throws when celsius < -273.15 (below absolute zero)
+        - public static Temperature FromFahrenheit(double fahrenheit)
+            no explicit guard required beyond the implicit Kelvin one.
+        - public int CompareTo(Temperature? other) — by Kelvin.
+
+      Sanity checks the tests verify:
+        - FromCelsius(0).Kelvin   ≈ 273.15
+        - FromFahrenheit(32).Celsius ≈ 0
+        - FromFahrenheit(-40).Celsius ≈ -40 (F/C crossover)
+        - new Temperature(-1) throws.
+
+      DO NOT run `dotnet test` yourself — just create Temperature.cs
+      and report done; the bench harness verifies. Seeded
+      `Temperature_Tests.cs` has ~12 cases; all must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Temperature.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 360
+          min_passed: 12
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 16

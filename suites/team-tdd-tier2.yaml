@@ -1,0 +1,312 @@
+name: team-tdd-tier2
+description: |
+  Tier 2: test-driven implementation. Each instance ships ONLY a
+  failing xUnit test suite — no prose spec, no example impl, no
+  hints. The agent must read the test cases (method names,
+  arrange/act/assert), INFER the contract, and implement the type
+  under test. PASS = all tests green.
+
+  This matches the most-common TicketForge ticket shape: "here is
+  a failing test, make it pass." Different from team-bugfix-tier2
+  (which ships a buggy impl alongside the failing test) — here
+  there's no impl at all, just the test file telling the agent
+  what's expected.
+
+  Run: vett team-bench team-tdd-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: td1-stack-from-tests
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Implement Stack<T> from test cases alone. Tests reference
+      Push, Pop, Peek, Count, and expected exceptions on empty.
+      No spec is provided.
+    workspace: empty-git-repo
+    seed_files:
+      Tdd.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Lib</RootNamespace>
+            <AssemblyName>Lib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Stack_Tests.cs: |
+        namespace Lib;
+
+        public class Stack_Tests
+        {
+            [Fact]
+            public void New_Stack_IsEmpty()
+            {
+                var s = new Stack<int>();
+                Assert.Equal(0, s.Count);
+            }
+
+            [Fact]
+            public void Push_IncrementsCount()
+            {
+                var s = new Stack<int>();
+                s.Push(1);
+                Assert.Equal(1, s.Count);
+                s.Push(2);
+                Assert.Equal(2, s.Count);
+            }
+
+            [Fact]
+            public void Pop_ReturnsLastPushed()
+            {
+                var s = new Stack<int>();
+                s.Push(1);
+                s.Push(2);
+                s.Push(3);
+                Assert.Equal(3, s.Pop());
+                Assert.Equal(2, s.Pop());
+                Assert.Equal(1, s.Pop());
+                Assert.Equal(0, s.Count);
+            }
+
+            [Fact]
+            public void Peek_ReturnsTopWithoutRemoving()
+            {
+                var s = new Stack<int>();
+                s.Push(7);
+                s.Push(8);
+                Assert.Equal(8, s.Peek());
+                Assert.Equal(8, s.Peek());      // unchanged
+                Assert.Equal(2, s.Count);       // count unchanged
+            }
+
+            [Fact]
+            public void Pop_FromEmpty_Throws()
+            {
+                var s = new Stack<int>();
+                Assert.ThrowsAny<System.Exception>(() => s.Pop());
+            }
+
+            [Fact]
+            public void Peek_FromEmpty_Throws()
+            {
+                var s = new Stack<int>();
+                Assert.ThrowsAny<System.Exception>(() => s.Peek());
+            }
+
+            [Fact]
+            public void Push_Pop_StringType()
+            {
+                var s = new Stack<string>();
+                s.Push("a");
+                s.Push("b");
+                Assert.Equal("b", s.Pop());
+                Assert.Equal("a", s.Pop());
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has only one C# file: `Stack_Tests.cs`. There
+      is NO spec, NO impl, NO doc — just the test file. Read the
+      test cases (method names, arrange, act, assert) to infer the
+      contract for a `Stack<T>` type in the `Lib` namespace, then
+      create `Stack.cs` implementing it.
+
+      You'll need to figure out from the tests:
+        - The class is generic (`Stack<T>`)
+        - What methods it needs (Push, Pop, Peek, Count)
+        - The semantics (LIFO ordering)
+        - The error behavior (Pop/Peek on empty throws)
+
+      DO NOT modify the test file. DO NOT run `dotnet test`
+      yourself — just create Stack.cs and report done; the bench
+      harness verifies. All 7 tests must pass.
+    timeout_seconds: 360
+    assertions:
+      - file: Stack.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 12
+
+  - id: td2-lru-cache-from-tests
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Implement LRU cache from test cases alone. Tests reference
+      a fixed-capacity cache that evicts the least-recently-used
+      entry when full; Get promotes the entry to most-recent.
+      No spec is provided.
+    workspace: empty-git-repo
+    seed_files:
+      Tdd.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>Lib</RootNamespace>
+            <AssemblyName>Lib</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      LruCache_Tests.cs: |
+        namespace Lib;
+
+        public class LruCache_Tests
+        {
+            [Fact]
+            public void New_Cache_HasCapacity()
+            {
+                var c = new LruCache<string, int>(capacity: 3);
+                Assert.Equal(3, c.Capacity);
+                Assert.Equal(0, c.Count);
+            }
+
+            [Fact]
+            public void Set_Then_Get_ReturnsValue()
+            {
+                var c = new LruCache<string, int>(2);
+                c.Set("a", 1);
+                Assert.True(c.TryGet("a", out var v));
+                Assert.Equal(1, v);
+            }
+
+            [Fact]
+            public void Get_Miss_ReturnsFalse()
+            {
+                var c = new LruCache<string, int>(2);
+                Assert.False(c.TryGet("absent", out _));
+            }
+
+            [Fact]
+            public void Set_ExistingKey_UpdatesValue()
+            {
+                var c = new LruCache<string, int>(2);
+                c.Set("a", 1);
+                c.Set("a", 99);
+                Assert.True(c.TryGet("a", out var v));
+                Assert.Equal(99, v);
+                Assert.Equal(1, c.Count);   // still one entry
+            }
+
+            [Fact]
+            public void ExceedingCapacity_EvictsLeastRecentlyUsed()
+            {
+                var c = new LruCache<string, int>(2);
+                c.Set("a", 1);
+                c.Set("b", 2);
+                c.Set("c", 3);   // forces eviction of "a" (LRU)
+                Assert.False(c.TryGet("a", out _));
+                Assert.True(c.TryGet("b", out _));
+                Assert.True(c.TryGet("c", out _));
+                Assert.Equal(2, c.Count);
+            }
+
+            [Fact]
+            public void Get_PromotesEntryToMostRecent()
+            {
+                var c = new LruCache<string, int>(2);
+                c.Set("a", 1);
+                c.Set("b", 2);
+                _ = c.TryGet("a", out _);   // promotes "a"
+                c.Set("c", 3);              // should evict "b" now (LRU), not "a"
+                Assert.True(c.TryGet("a", out _));
+                Assert.False(c.TryGet("b", out _));
+                Assert.True(c.TryGet("c", out _));
+            }
+
+            [Fact]
+            public void Set_PromotesEntryToMostRecent()
+            {
+                var c = new LruCache<string, int>(2);
+                c.Set("a", 1);
+                c.Set("b", 2);
+                c.Set("a", 11);   // re-setting "a" should also promote it
+                c.Set("c", 3);    // should evict "b" (LRU)
+                Assert.True(c.TryGet("a", out _));
+                Assert.False(c.TryGet("b", out _));
+                Assert.True(c.TryGet("c", out _));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has only one C# file: `LruCache_Tests.cs`.
+      There is NO spec, NO impl, NO doc — just the test file.
+      Read the test cases (method names, arrange, act, assert) to
+      infer the contract for an `LruCache<TKey, TValue>` type in
+      the `Lib` namespace, then create `LruCache.cs` implementing
+      it.
+
+      You'll need to figure out from the tests:
+        - The class is generic on `<TKey, TValue>`
+        - Constructor takes a capacity (int)
+        - `Capacity` and `Count` properties
+        - `Set(key, value)`, `TryGet(key, out value)` methods
+        - LRU eviction policy when capacity exceeded
+        - Both Set-existing-key AND TryGet promote the entry to most-recent
+
+      DO NOT modify the test file. DO NOT run `dotnet test`
+      yourself — just create LruCache.cs and report done; the
+      bench harness verifies. All 7 tests must pass.
+    timeout_seconds: 480
+    assertions:
+      - file: LruCache.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 20
+          leader_iters_max: 12

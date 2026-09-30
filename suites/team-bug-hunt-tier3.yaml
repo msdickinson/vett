@@ -1,0 +1,677 @@
+name: team-bug-hunt-tier3
+description: |
+  A9 — Bug Hunt. Codebase contains a bug exposed only by a failing
+  test. NO pointer to the file/function in the prompt. Tests the
+  agent's ability to triage, search, identify root cause, and fix
+  without guidance.
+
+  Each instance ships a small-but-plausible 3–5 file C# codebase with
+  multiple suspects, exactly ONE bug, and a deterministic failing
+  test. Production code only — bug is NEVER in the test file.
+
+  Run: vett team-bench team-bug-hunt-tier3
+
+profile: ds-team-flash
+tier: 3
+
+instances:
+  # ============================================================
+  # bh1 — Pagination off-by-one (page>1 skips one extra item)
+  # ============================================================
+  - id: bh1-pagination-offbyone
+    taxonomy: &a9_tax
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "3"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      A9 — `PageService.GetPage` returns wrong slice for page > 1.
+      Off-by-one in skip calculation. Pure C#, no I/O.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      PageRequest.cs: |
+        namespace BugHunt;
+
+        public record PageRequest(int Page, int PageSize)
+        {
+            public int Skip => (Page - 1) * PageSize;
+            public int Take => PageSize;
+        }
+      PageResult.cs: |
+        namespace BugHunt;
+
+        public record PageResult<T>(IReadOnlyList<T> Items, int TotalCount, int Page, int PageSize);
+      PageService.cs: |
+        namespace BugHunt;
+
+        // Returns a page of items. Page is 1-indexed. PageSize > 0.
+        public class PageService
+        {
+            public PageResult<T> GetPage<T>(IEnumerable<T> source, PageRequest req)
+            {
+                var all = source as IList<T> ?? source.ToList();
+                // BUG: skips one extra item — uses Skip+1 instead of Skip.
+                var slice = all.Skip(req.Skip + 1).Take(req.Take).ToList();
+                return new PageResult<T>(slice, all.Count, req.Page, req.PageSize);
+            }
+        }
+      PageService_Tests.cs: |
+        namespace BugHunt;
+
+        public class PageService_Tests
+        {
+            private static readonly int[] Source = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+            [Fact] public void Page1_ReturnsFirstSlice()
+            {
+                var r = new PageService().GetPage(Source, new PageRequest(1, 3));
+                Assert.Equal(new[] { 1, 2, 3 }, r.Items);
+            }
+            [Fact] public void Page2_ReturnsSecondSlice()
+            {
+                var r = new PageService().GetPage(Source, new PageRequest(2, 3));
+                Assert.Equal(new[] { 4, 5, 6 }, r.Items);
+            }
+            [Fact] public void Page4_ReturnsTail()
+            {
+                var r = new PageService().GetPage(Source, new PageRequest(4, 3));
+                Assert.Equal(new[] { 10 }, r.Items);
+            }
+            [Fact] public void TotalCount_IsAllItems()
+            {
+                var r = new PageService().GetPage(Source, new PageRequest(2, 3));
+                Assert.Equal(10, r.TotalCount);
+            }
+        }
+    prompt: |
+      A test is failing in this codebase. Find the bug and fix it.
+      The bug is in the production code, NOT in the tests. The tests
+      tell you what's expected.
+
+      Dispatch an implementer to:
+        1. Run `dotnet test` to see what's failing.
+        2. Read the production code and identify the root cause.
+        3. Fix the bug. All 4 tests must pass.
+
+      Do NOT modify the test file. The bug is somewhere in the
+      production code. Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - file: PageService_Tests.cs
+        content_matches: 'Assert.Equal\(new\[\] \{ 4, 5, 6 \}, r.Items\)'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20
+
+  # ============================================================
+  # bh2 — Discount boundary: `>` instead of `>=` at threshold
+  # ============================================================
+  - id: bh2-discount-boundary
+    taxonomy: *a9_tax
+    description: |
+      A9 — `DiscountCalculator.Apply` uses `>` instead of `>=` at the
+      100.00 threshold. Boundary test fails.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Order.cs: |
+        namespace BugHunt;
+
+        public record OrderLine(string Sku, int Quantity, decimal UnitPrice)
+        {
+            public decimal LineTotal => Quantity * UnitPrice;
+        }
+
+        public class Order
+        {
+            public List<OrderLine> Lines { get; } = new();
+            public decimal Subtotal => Lines.Sum(l => l.LineTotal);
+        }
+      DiscountPolicy.cs: |
+        namespace BugHunt;
+
+        // Policy: orders with subtotal >= 100 get 10% off.
+        // Orders with subtotal >= 500 get 15% off instead.
+        public static class DiscountPolicy
+        {
+            public const decimal Tier1Threshold = 100m;
+            public const decimal Tier1Rate = 0.10m;
+            public const decimal Tier2Threshold = 500m;
+            public const decimal Tier2Rate = 0.15m;
+        }
+      DiscountCalculator.cs: |
+        namespace BugHunt;
+
+        public class DiscountCalculator
+        {
+            public decimal Apply(Order order)
+            {
+                var sub = order.Subtotal;
+                // BUG: should be `>=` at the threshold; `>` excludes the boundary.
+                if (sub > DiscountPolicy.Tier2Threshold) return sub * (1 - DiscountPolicy.Tier2Rate);
+                if (sub > DiscountPolicy.Tier1Threshold) return sub * (1 - DiscountPolicy.Tier1Rate);
+                return sub;
+            }
+        }
+      DiscountCalculator_Tests.cs: |
+        namespace BugHunt;
+
+        public class DiscountCalculator_Tests
+        {
+            private static Order Make(decimal subtotal)
+            {
+                var o = new Order();
+                o.Lines.Add(new OrderLine("X", 1, subtotal));
+                return o;
+            }
+            private readonly DiscountCalculator _c = new();
+
+            [Fact] public void Below_Tier1_NoDiscount()
+                => Assert.Equal(99m, _c.Apply(Make(99m)));
+            [Fact] public void At_Tier1_AppliesTier1()
+                => Assert.Equal(90m, _c.Apply(Make(100m)));
+            [Fact] public void Between_Tiers_AppliesTier1()
+                => Assert.Equal(360m, _c.Apply(Make(400m)));
+            [Fact] public void At_Tier2_AppliesTier2()
+                => Assert.Equal(425m, _c.Apply(Make(500m)));
+            [Fact] public void Above_Tier2_AppliesTier2()
+                => Assert.Equal(850m, _c.Apply(Make(1000m)));
+        }
+    prompt: |
+      A test is failing. Find the bug in the production code and fix
+      it. Do not modify the tests. Dispatch an implementer:
+        1. Run `dotnet test` to identify failure.
+        2. Read the production code.
+        3. Fix the root cause. All 5 tests must pass.
+      Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 5
+          max_failed: 0
+      - file: DiscountCalculator_Tests.cs
+        content_matches: 'At_Tier1_AppliesTier1'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20
+
+  # ============================================================
+  # bh3 — Case-sensitive email match (should be case-insensitive)
+  # ============================================================
+  - id: bh3-email-case
+    taxonomy: *a9_tax
+    description: |
+      A9 — `UserRepository.FindByEmail` does case-sensitive equality.
+      Lookup fails when caller supplies mixed/upper case.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      User.cs: |
+        namespace BugHunt;
+
+        public record User(int Id, string DisplayName, string Email);
+      IUserRepository.cs: |
+        namespace BugHunt;
+
+        public interface IUserRepository
+        {
+            User? FindByEmail(string email);
+            User? FindById(int id);
+        }
+      InMemoryUserRepository.cs: |
+        namespace BugHunt;
+
+        public class InMemoryUserRepository : IUserRepository
+        {
+            private readonly List<User> _users;
+            public InMemoryUserRepository(IEnumerable<User> seed) => _users = seed.ToList();
+
+            public User? FindById(int id) => _users.FirstOrDefault(u => u.Id == id);
+
+            // BUG: equality should be ordinal-ignore-case. Email storage
+            // is normalized to lower, but the lookup is case-sensitive.
+            public User? FindByEmail(string email) =>
+                _users.FirstOrDefault(u => u.Email == email);
+        }
+      UserRepository_Tests.cs: |
+        namespace BugHunt;
+
+        public class UserRepository_Tests
+        {
+            private static IUserRepository Make() => new InMemoryUserRepository(new[]
+            {
+                new User(1, "Alice", "alice@example.com"),
+                new User(2, "Bob",   "bob@example.com"),
+            });
+
+            [Fact] public void FindByEmail_Exact() =>
+                Assert.Equal(1, Make().FindByEmail("alice@example.com")!.Id);
+            [Fact] public void FindByEmail_UpperCase_StillMatches() =>
+                Assert.Equal(1, Make().FindByEmail("ALICE@EXAMPLE.COM")!.Id);
+            [Fact] public void FindByEmail_MixedCase_StillMatches() =>
+                Assert.Equal(2, Make().FindByEmail("Bob@Example.Com")!.Id);
+            [Fact] public void FindByEmail_Unknown_ReturnsNull() =>
+                Assert.Null(Make().FindByEmail("nobody@example.com"));
+            [Fact] public void FindById_Works() =>
+                Assert.Equal("Bob", Make().FindById(2)!.DisplayName);
+        }
+    prompt: |
+      A test in this repository is failing. The bug is in production
+      code, not tests. Dispatch an implementer to:
+        1. Run `dotnet test`.
+        2. Identify the failing test and find the root cause in the
+           production code.
+        3. Fix it. All 5 tests must pass. Do not change the tests.
+      Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 5
+          max_failed: 0
+      - file: UserRepository_Tests.cs
+        content_matches: 'UpperCase_StillMatches'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20
+
+  # ============================================================
+  # bh4 — Null-discount NRE in order total
+  # ============================================================
+  - id: bh4-null-discount
+    taxonomy: *a9_tax
+    description: |
+      A9 — `OrderTotalCalculator` throws NRE when a line has no
+      discount. `.Discount.Value` accessed unconditionally.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      OrderLine.cs: |
+        namespace BugHunt;
+
+        // Discount is OPTIONAL — null means "no discount", same as 0.
+        public record OrderLine(string Sku, int Quantity, decimal UnitPrice, decimal? Discount);
+      TaxPolicy.cs: |
+        namespace BugHunt;
+
+        public static class TaxPolicy
+        {
+            public const decimal Rate = 0.08m;
+            public static decimal WithTax(decimal subtotal) => subtotal * (1 + Rate);
+        }
+      OrderTotalCalculator.cs: |
+        namespace BugHunt;
+
+        public class OrderTotalCalculator
+        {
+            public decimal Subtotal(IEnumerable<OrderLine> lines)
+            {
+                decimal sum = 0m;
+                foreach (var l in lines)
+                {
+                    // BUG: l.Discount may be null; .Value throws NRE.
+                    var lineTotal = l.Quantity * l.UnitPrice - l.Discount.Value;
+                    sum += lineTotal;
+                }
+                return sum;
+            }
+
+            public decimal Total(IEnumerable<OrderLine> lines) =>
+                TaxPolicy.WithTax(Subtotal(lines));
+        }
+      OrderTotalCalculator_Tests.cs: |
+        namespace BugHunt;
+
+        public class OrderTotalCalculator_Tests
+        {
+            private readonly OrderTotalCalculator _c = new();
+
+            [Fact] public void Subtotal_NoDiscounts()
+            {
+                var lines = new[]
+                {
+                    new OrderLine("A", 2, 10m, null),
+                    new OrderLine("B", 1, 5m,  null),
+                };
+                Assert.Equal(25m, _c.Subtotal(lines));
+            }
+            [Fact] public void Subtotal_MixedDiscounts()
+            {
+                var lines = new[]
+                {
+                    new OrderLine("A", 2, 10m, 2m),
+                    new OrderLine("B", 1, 5m,  null),
+                };
+                Assert.Equal(23m, _c.Subtotal(lines));
+            }
+            [Fact] public void Subtotal_AllDiscounts()
+            {
+                var lines = new[]
+                {
+                    new OrderLine("A", 2, 10m, 5m),
+                    new OrderLine("B", 1, 5m,  1m),
+                };
+                Assert.Equal(19m, _c.Subtotal(lines));
+            }
+            [Fact] public void Total_AppliesTax()
+                => Assert.Equal(27m, _c.Total(new[]{ new OrderLine("A", 1, 25m, null) }));
+        }
+    prompt: |
+      A test is failing in this codebase. Find the bug in production
+      code and fix it. Do not modify the tests. Dispatch an implementer:
+        1. Run `dotnet test`.
+        2. Identify the failure.
+        3. Fix the root cause. All 4 tests must pass.
+      Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - file: OrderTotalCalculator_Tests.cs
+        content_matches: 'Subtotal_NoDiscounts'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20
+
+  # ============================================================
+  # bh5 — Moving-average loop bound off-by-one (one fewer output)
+  # ============================================================
+  - id: bh5-movingavg-loopbound
+    taxonomy: *a9_tax
+    description: |
+      A9 — `MovingAverage.Compute` loop terminates one iteration early,
+      so the trailing window is missing.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      WindowValidator.cs: |
+        namespace BugHunt;
+
+        public static class WindowValidator
+        {
+            public static void Check(int dataLen, int window)
+            {
+                if (window <= 0) throw new ArgumentOutOfRangeException(nameof(window));
+                if (window > dataLen) throw new ArgumentException("window > data length");
+            }
+        }
+      MovingAverage.cs: |
+        namespace BugHunt;
+
+        public class MovingAverage
+        {
+            // Returns `data.Length - window + 1` averages.
+            public double[] Compute(double[] data, int window)
+            {
+                WindowValidator.Check(data.Length, window);
+                var result = new List<double>();
+                // BUG: bound should be `<= data.Length - window`, written `< data.Length - window`.
+                for (int i = 0; i < data.Length - window; i++)
+                {
+                    double sum = 0;
+                    for (int j = 0; j < window; j++) sum += data[i + j];
+                    result.Add(sum / window);
+                }
+                return result.ToArray();
+            }
+        }
+      MovingAverage_Tests.cs: |
+        namespace BugHunt;
+
+        public class MovingAverage_Tests
+        {
+            [Fact] public void Window2_FiveItems()
+            {
+                var avg = new MovingAverage().Compute(new[]{ 1.0, 2.0, 3.0, 4.0, 5.0 }, 2);
+                Assert.Equal(new[]{ 1.5, 2.5, 3.5, 4.5 }, avg);
+            }
+            [Fact] public void Window3_FiveItems()
+            {
+                var avg = new MovingAverage().Compute(new[]{ 1.0, 2.0, 3.0, 4.0, 5.0 }, 3);
+                Assert.Equal(new[]{ 2.0, 3.0, 4.0 }, avg);
+            }
+            [Fact] public void WindowEqualsLen_OneAvg()
+            {
+                var avg = new MovingAverage().Compute(new[]{ 2.0, 4.0, 6.0 }, 3);
+                Assert.Equal(new[]{ 4.0 }, avg);
+            }
+            [Fact] public void Window_TooLarge_Throws()
+            {
+                Assert.Throws<ArgumentException>(() => new MovingAverage().Compute(new[]{ 1.0 }, 5));
+            }
+        }
+    prompt: |
+      A test is failing. The bug is in production code (not tests).
+      Dispatch an implementer:
+        1. Run `dotnet test`.
+        2. Identify and fix the bug. All 4 tests must pass.
+      Do NOT modify the tests. Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - file: MovingAverage_Tests.cs
+        content_matches: 'WindowEqualsLen_OneAvg'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20
+
+  # ============================================================
+  # bh6 — ShoppingCart "WithDiscount" mutates instead of cloning
+  # ============================================================
+  - id: bh6-cart-mutation
+    taxonomy: *a9_tax
+    description: |
+      A9 — `ShoppingCart.WithDiscount` claims to return a new cart but
+      mutates the original. Immutability test fails.
+    workspace: empty-git-repo
+    seed_files:
+      BugHunt.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>BugHunt</RootNamespace>
+            <AssemblyName>BugHunt</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      CartItem.cs: |
+        namespace BugHunt;
+
+        public record CartItem(string Sku, int Quantity, decimal UnitPrice);
+      ShoppingCart.cs: |
+        namespace BugHunt;
+
+        public class ShoppingCart
+        {
+            public IReadOnlyList<CartItem> Items { get; }
+            public decimal Discount { get; private set; }
+
+            public ShoppingCart(IEnumerable<CartItem> items, decimal discount = 0m)
+            {
+                Items = items.ToList();
+                Discount = discount;
+            }
+
+            // Should return a NEW cart with the discount applied,
+            // leaving `this` unchanged.
+            public ShoppingCart WithDiscount(decimal rate)
+            {
+                // BUG: mutates `this` and returns it.
+                Discount = rate;
+                return this;
+            }
+
+            public decimal Total()
+            {
+                var sub = Items.Sum(i => i.Quantity * i.UnitPrice);
+                return sub * (1 - Discount);
+            }
+        }
+      ShoppingCart_Tests.cs: |
+        namespace BugHunt;
+
+        public class ShoppingCart_Tests
+        {
+            private static ShoppingCart Make() => new(new[]
+            {
+                new CartItem("A", 2, 10m),
+                new CartItem("B", 1, 30m),
+            });
+
+            [Fact] public void Total_NoDiscount()
+                => Assert.Equal(50m, Make().Total());
+            [Fact] public void WithDiscount_ReturnsCartWithDiscount()
+                => Assert.Equal(45m, Make().WithDiscount(0.10m).Total());
+            [Fact] public void WithDiscount_DoesNotMutateOriginal()
+            {
+                var original = Make();
+                var _ = original.WithDiscount(0.10m);
+                Assert.Equal(0m, original.Discount);
+                Assert.Equal(50m, original.Total());
+            }
+            [Fact] public void WithDiscount_NewInstance()
+            {
+                var original = Make();
+                var derived = original.WithDiscount(0.10m);
+                Assert.NotSame(original, derived);
+            }
+        }
+    prompt: |
+      A test is failing. The bug is in production code (not tests).
+      Dispatch an implementer:
+        1. Run `dotnet test`.
+        2. Find the root cause and fix it. All 4 tests must pass.
+      Do NOT modify the tests. Accept_dispatch.
+    timeout_seconds: 540
+    assertions:
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 300
+          min_passed: 4
+          max_failed: 0
+      - file: ShoppingCart_Tests.cs
+        content_matches: 'DoesNotMutateOriginal'
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 30
+          leader_iters_max: 20

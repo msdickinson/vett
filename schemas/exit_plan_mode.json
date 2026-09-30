@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "exit_plan_mode",
+    "description": "Call this when you have finished planning and are ready to present the plan to the user. The user will review your plan and either approve (which switches the chat to execute mode and lets you carry it out with full tool access) or reject (which keeps you in plan mode with their feedback so you can revise). After calling this tool, STOP — do not call any more tools and do not emit any more text. Your turn ends here. The `plan` argument must be the complete markdown plan: file paths to be created/modified, what each change does, why, and the order of operations. Available only when the chat is in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string",
+          "description": "The complete markdown plan describing the proposed changes. Use headings, bullet lists, and file paths so the user can quickly understand what will happen if they approve."
+        }
+      },
+      "required": ["plan"]
+    }
+  }
+}

@@ -1,0 +1,346 @@
+name: team-smoke-tier2
+description: |
+  Tier 2 sub-agent dispatch benchmarks. These exercise harder dispatch
+  patterns we expect to dial in over time — parallel fan-out, sequential
+  pipelines, member-to-member handoff, error recovery, long-context edits.
+  A failure here is a "bug to fix soon" rather than a release blocker.
+
+  Run: vett team-bench team-smoke-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: t2-1-parallel-fanout
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Two implementers in parallel via assign_async, OWNS-disjoint, leader
+      accepts both. Tests that fan-out + multiple background_task_results
+      blocks + multiple accepts work.
+    workspace: empty-git-repo
+    prompt: |
+      Dispatch TWO implementers in parallel using assign_async (single
+      response, both calls together). They must work on disjoint files:
+
+        - Implementer A — OWNS: package.json. Create package.json with
+          {"name":"demo","version":"0.1.0"}.
+        - Implementer B — OWNS: tsconfig.json. Create tsconfig.json with
+          {"compilerOptions":{"strict":true}}.
+
+      As each completes, review and accept_dispatch each one. Tell me
+      both task_ids you accepted.
+    timeout_seconds: 300
+    assertions:
+      # Two distinct member dispatches both ended with pending_review.
+      - event: dispatch_end
+        member: implementer
+        files_changed_min: 1
+        pending_review: true
+      # Both got accepted (we'd need a count assertion to enforce >=2;
+      # this just enforces at least one passed all field constraints).
+      - tool_call: accept_dispatch
+        success: true
+        args_min_length:
+          review: 15
+      # Both files landed.
+      - file: package.json
+        exists: true
+        content_matches: '"name"\s*:\s*"demo"'
+      - file: tsconfig.json
+        exists: true
+        content_matches: '"strict"\s*:\s*true'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 12
+          leader_iters_max: 18
+
+  - id: t2-2-sequential-pipeline
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      First dispatch creates schema.json. Leader accepts. Second dispatch
+      reads the now-applied schema.json and creates a matching types.ts.
+      Tests state-after-accept (the second dispatch's worktree must see
+      the first dispatch's commit).
+    workspace: empty-git-repo
+    prompt: |
+      This is a two-step pipeline — DO NOT do them in parallel.
+
+      Step 1: Dispatch an implementer to create schema.json with this
+        exact content:
+          {"type": "User", "fields": ["id", "name", "email"]}
+        Review and accept_dispatch when they finish.
+
+      Step 2: AFTER step 1 is accepted, dispatch a SECOND implementer
+        to read schema.json and create types.ts that exports a TypeScript
+        interface User with the three fields as `string`. Review and
+        accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - tool_call: accept_dispatch
+        success: true
+      - file: schema.json
+        exists: true
+        content_matches: '"type"\s*:\s*"User"'
+      - file: types.ts
+        exists: true
+        content_matches: 'interface\s+User'
+      - file: types.ts
+        content_matches: '\bemail\b'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 25
+
+  - id: t2-3-researcher-then-impl
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Researcher locates which seeded file has a TODO; implementer
+      removes it. Tests member-to-member handoff via leader.
+    workspace: empty-git-repo
+    seed_files:
+      src/a.ts: |
+        export const a = 1;
+      src/b.ts: |
+        // TODO: replace this comment with a real value
+        export const b = 2;
+      src/c.ts: |
+        export const c = 3;
+    prompt: |
+      Step 1: Have the researcher find which file under src/ contains a
+        TODO comment. They should report which file.
+
+      Step 2: AFTER you have the researcher's answer, dispatch an
+        implementer to delete the TODO comment line from that file
+        (only the comment line — leave the export). Review and
+        accept_dispatch.
+    timeout_seconds: 360
+    assertions:
+      - event: dispatch_end
+        member: researcher
+      - event: dispatch_end
+        member: implementer
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+      # The TODO is gone from b.ts but the export remains.
+      - file: src/b.ts
+        exists: true
+        content_matches: '^export const b = 2;\s*$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 20
+
+  - id: t2-4-recovery-file-exists
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Seed README.md already exists. Leader asks implementer to "create
+      README.md with X" — implementer should hit file_exists, recover,
+      switch to str_replace.
+    workspace: empty-git-repo
+    seed_files:
+      README.md: |
+        # OldTitle
+        old body
+    prompt: |
+      Have an implementer create README.md with the content "# NewTitle"
+      followed by a one-paragraph description. Review and accept_dispatch.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+      - file: README.md
+        exists: true
+        content_matches: '^#\s*NewTitle\b'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          # Recovery from file_exists takes more iters than a clean
+          # create — measured 13-15 across runs. 18 gives headroom.
+          member_iters_max: 18
+          leader_iters_max: 12
+
+  - id: t2-5-long-file-edit
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      Seeded 100-line config file. Implementer must change line 47 only —
+      the str_replace must locate the right slice without rewriting the
+      whole file.
+    workspace: empty-git-repo
+    seed_files:
+      app.conf: |
+        # line 1
+        # line 2
+        # line 3
+        # line 4
+        # line 5
+        # line 6
+        # line 7
+        # line 8
+        # line 9
+        # line 10
+        # line 11
+        # line 12
+        # line 13
+        # line 14
+        # line 15
+        # line 16
+        # line 17
+        # line 18
+        # line 19
+        # line 20
+        # line 21
+        # line 22
+        # line 23
+        # line 24
+        # line 25
+        # line 26
+        # line 27
+        # line 28
+        # line 29
+        # line 30
+        # line 31
+        # line 32
+        # line 33
+        # line 34
+        # line 35
+        # line 36
+        # line 37
+        # line 38
+        # line 39
+        # line 40
+        # line 41
+        # line 42
+        # line 43
+        # line 44
+        # line 45
+        # line 46
+        max_connections = 100
+        # line 48
+        # line 49
+        # line 50
+        # line 51
+        # line 52
+        # line 53
+        # line 54
+        # line 55
+        # line 56
+        # line 57
+        # line 58
+        # line 59
+        # line 60
+        # line 61
+        # line 62
+        # line 63
+        # line 64
+        # line 65
+        # line 66
+        # line 67
+        # line 68
+        # line 69
+        # line 70
+        # line 71
+        # line 72
+        # line 73
+        # line 74
+        # line 75
+        # line 76
+        # line 77
+        # line 78
+        # line 79
+        # line 80
+        # line 81
+        # line 82
+        # line 83
+        # line 84
+        # line 85
+        # line 86
+        # line 87
+        # line 88
+        # line 89
+        # line 90
+        # line 91
+        # line 92
+        # line 93
+        # line 94
+        # line 95
+        # line 96
+        # line 97
+        # line 98
+        # line 99
+        # line 100
+    prompt: |
+      Have an implementer edit app.conf — change `max_connections = 100`
+      to `max_connections = 250`. Leave every other line exactly as it
+      is. Review and accept_dispatch.
+    timeout_seconds: 240
+    assertions:
+      - event: dispatch_end
+        member: implementer
+        pending_review: true
+      - tool_call: accept_dispatch
+        success: true
+      - file: app.conf
+        exists: true
+        content_matches: '^max_connections = 250$'
+      # And the rest of the file is intact (a sentinel from line 1 and 100).
+      - file: app.conf
+        content_matches: '^# line 1$'
+      - file: app.conf
+        content_matches: '^# line 100$'
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 12

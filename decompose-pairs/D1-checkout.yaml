@@ -1,0 +1,14 @@
+name: D1-checkout
+description: |
+  Monolithic A7 "build whole Checkout context" vs decomposed
+  A5 (Money) + A5 (Order) + A6 (CheckoutService).
+  Both end-states graded by the same dotnet_test assertion.
+
+monolith:
+  suite: team-decompose-pairs-tier2
+  instance: D1-monolith-checkout
+
+decomposed:
+  - { suite: team-decompose-pairs-tier2, instance: D1-step1-money }
+  - { suite: team-decompose-pairs-tier2, instance: D1-step2-order }
+  - { suite: team-decompose-pairs-tier2, instance: D1-step3-checkout }

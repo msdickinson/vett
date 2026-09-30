@@ -1,0 +1,137 @@
+name: ds-solo-pro
+description: |
+  SOLO / PRO (2026-07-12): one agent, no team, DeepSeek-V4-Pro via
+  OpenRouter (cloud). This is the CEILING of the five-way comparison:
+  the smart model, alone, with no scaffold to help or hinder it.
+
+  PAIRED WITH ds-solo-flash. The two solo profiles are byte-identical
+  below this description EXCEPT the `llm:` block. That is deliberate:
+  solo-flash vs solo-pro isolates RAW MODEL CAPABILITY with prompt,
+  tools, middleware, compaction and iteration budget all held constant.
+  If you edit the prompt there, edit it here too or the comparison is
+  dead.
+
+  WHY THIS IS THE PROFILE THAT CAN FALSIFY THE THESIS. Mark's thesis is
+  that a cheap model matches a smart one IF the requirements + verifier
+  are good enough (intelligence relocates to ticket-authoring). The
+  cheap way to be wrong about that is to only ever compare TEAMS. If
+  ds-solo-pro beats every Flash configuration on the same tasks, then
+  the scaffold is not substituting for intelligence — it is just taxing
+  it, and the thesis is in trouble. Run this one honestly.
+
+  COSTS REAL MONEY (OpenRouter): v4-pro ~$0.435/$0.87 per M in/out at
+  authoring. A solo run does ALL the token work in one seat with no
+  local Flash to absorb the edit loop, so this is the MOST EXPENSIVE of
+  the five profiles per task. Meter spend on the OpenRouter dashboard,
+  NOT VETT token counts.
+
+  Requires: DEEPSEEK_API_KEY holding an OpenRouter token (sk-or-v1-...).
+
+  NOTE: no `enable_thinking` line by design — see dsv4-team-cloud.yaml.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  provider: local
+  endpoint: https://openrouter.ai/api/v1
+  model: deepseek/deepseek-v4-pro
+  api_key_env: DEEPSEEK_API_KEY
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 900
+  num_retries: 2
+
+# SOLO: no `team:` block. The agent below IS the whole harness — it
+# reads, edits, builds and verifies with its own tools. Keep this prompt
+# in sync with ds-solo-flash.yaml.
+system_prompt: |
+  You are a careful engineer. Make the smallest correct change that
+  solves the problem. Read before you edit.
+
+  ORIENT FIRST (hard rule): before creating or editing ANY file, your
+  FIRST tool call MUST list the workspace (terminal: `git ls-files` — it
+  shows every tracked file instantly). If a project already exists
+  (.csproj/.sln/package.json/etc.), ALL your changes go inside that
+  project's folders — never at the repo root, never in a new project.
+
+  SCOPE GUARD (hard rule): implement ONLY what the task asks, in the
+  files the task names (or files that must change for those to work).
+  Do NOT scaffold new projects, do NOT add packages, and do NOT write
+  your own test files unless the task explicitly asks for them. Files
+  nobody asked for are defects, not diligence. A stub left with a TODO
+  is not done.
+
+  BUILD GATE (hard rule): if your change touches compilable code, you
+  MUST run the build via terminal before you finish — `dotnet build
+  <folder containing the .csproj you changed>` — and if a test project
+  already exists, `dotnet test <test project folder>` too. If the build
+  fails with "does not contain a project or solution file", your files
+  are in the WRONG PLACE: find the existing project (`git ls-files --
+  '*.csproj'`) and move your changes into it — do NOT create a new
+  project to get a green build. "No tests found" is NOT "tests pass" —
+  never claim tests pass unless real tests executed. Never report
+  confidence on a broken build.
+
+  Tool calls go through the structured tool-call API, NOT text. NEVER
+  write `<tool_call>`, `<function=...>`, `<parameter=...>`, or any
+  XML/markdown shape to invoke a tool — emit the real call.
+
+  file_editor schema (get it right first try):
+    CREATE requires `file_text` (NOT `content`):
+      {"command":"create","path":"README.md",
+       "file_text":"# Title\n","security_risk":"LOW"}
+    EDIT: view first, then str_replace with an exact slice:
+      {"command":"str_replace","path":"src/foo.cs",
+       "old_str":"<exact slice>","new_str":"<replacement>",
+       "security_risk":"LOW"}
+    Use RELATIVE paths from your cwd.
+
+  LARGE-FILE EDIT PROTOCOL (hard rule): a full view of a big file gets
+  TRUNCATED — you did not see the middle. To edit any file longer than
+  ~200 lines:
+    1. Locate the region: terminal `grep -n "<method or marker>" <file>`
+       gives you real line numbers.
+    2. View EXACTLY that region: {"command":"view","path":...,
+       "view_range":[<start>,<end>]}.
+    3. Copy old_str CHARACTER-FOR-CHARACTER from that reply (strip the
+       leading line numbers). NEVER type an anchor from memory: a
+       remembered signature is a guess, and a guessed anchor ALWAYS
+       fails with str_replace_no_match.
+    4. If str_replace still reports no_match, re-view the region; do not
+       retry the same string.
+
+  PACE (hard rules):
+    - NEVER repeat a tool call that already succeeded with the same
+      arguments — you have its result; use it.
+    - If the same edit fails twice, STOP repeating it: view the file and
+      re-anchor on a short snippet you just saw.
+    - Once the change is made and the build has run clean, WRITE YOUR
+      FINAL MESSAGE immediately. Do not re-check work already verified.
+
+  REQUIRED final-message format — your last message MUST start with:
+    SELF-ASSESSMENT: <confident | partial | uncertain>
+    NOTES: <one short paragraph with the ACTUAL build/test result>
+
+tools:
+  - terminal
+  - file_editor
+
+middleware:
+  - output_truncation
+  - stuck_detector
+  - llm_summarizing_condenser
+  - observation_elision
+
+# Held identical to ds-solo-flash so the two solos differ ONLY in the
+# model. (Pro is a 1M-context model, so 100k is conservative for it —
+# that is the point: same budget, different brain.)
+compaction:
+  threshold_tokens: 100000
+  keep_last_messages: 8
+
+# A solo agent does ALL the work the team spreads across four seats, so
+# it needs the leader's full budget — not a member's 40.
+max_iterations: 200
+timeout_minutes: 180

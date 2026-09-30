@@ -1,0 +1,34 @@
+{
+  "type": "function",
+  "function": {
+    "name": "update_memory",
+    "description": "Save, update, or delete a persistent memory entry that survives across chat sessions. Use this when you learn something durable: the user's role and preferences, corrections they've given (with the reason behind them), ongoing project state with deadlines, or pointers to where information lives in external systems. Entries are auto-loaded into the system prompt at the start of every session via .vett/memory/MEMORY.md.\n\nUse 'user' for facts about who the user is and how they like to work; 'feedback' for behavioral guidance (lead with the rule, then a Why: line and a How to apply: line); 'project' for ongoing initiatives, decisions, or deadlines (include the why); 'reference' for pointers to external systems (Linear projects, dashboards, channels).\n\nKeep entries concise. Don't save things derivable from the codebase (file paths, conventions, recent changes, ephemeral task state) — those go stale fast. Prefer updating an existing memory over creating a new near-duplicate.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Snake_case identifier for the entry (e.g. 'user_role', 'feedback_terse_responses', 'project_q2_deadline'). Reused for the topic filename and the index entry. Re-using an existing name updates that entry."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["user", "feedback", "project", "reference"],
+          "description": "Category. 'user' = who the user is. 'feedback' = behavioral corrections / validations. 'project' = ongoing work, deadlines, decisions. 'reference' = pointers to external systems."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line summary shown in the index. Be specific; this is what helps you decide whether the memory is relevant in a future session."
+        },
+        "content": {
+          "type": "string",
+          "description": "Markdown body of the memory. For 'feedback' / 'project' entries, structure as: <one-line rule/fact>, then **Why:** line (the motivation), then **How to apply:** line (when to invoke this knowledge)."
+        },
+        "delete": {
+          "type": "boolean",
+          "description": "Set to true to remove the named memory entry instead of saving."
+        }
+      },
+      "required": ["name"]
+    }
+  }
+}

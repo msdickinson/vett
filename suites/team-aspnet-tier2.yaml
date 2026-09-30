@@ -1,0 +1,462 @@
+name: team-aspnet-tier2
+description: |
+  Tier 2: common ASP.NET / DI / validation patterns. Each instance
+  ships a partial .NET 10 project with the wiring already in place
+  (DI container, test fixtures) and asks the agent to add a
+  specific cross-cutting concern: register a service, write a
+  validator, wire an endpoint. Common shape of real TF tickets
+  for .NET shops that aren't pure DDD.
+
+  Run: vett team-bench team-aspnet-tier2
+
+profile: ds-team-flash
+tier: 2
+
+instances:
+  - id: a1-di-register-service
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "low"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      An IClock interface + SystemClock impl exist; the agent must
+      register them in a static AddDomainServices(IServiceCollection)
+      extension method so the DI container can resolve IClock. Tests
+      build a ServiceProvider and assert resolution + lifetime.
+    workspace: empty-git-repo
+    seed_files:
+      Di.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>App</RootNamespace>
+            <AssemblyName>App</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      IClock.cs: |
+        namespace App;
+
+        public interface IClock
+        {
+            DateTimeOffset UtcNow { get; }
+        }
+
+        public sealed class SystemClock : IClock
+        {
+            public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
+        }
+      Di_Tests.cs: |
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace App;
+
+        public class Di_Tests
+        {
+            [Fact]
+            public void Resolves_IClock()
+            {
+                var sp = new ServiceCollection().AddDomainServices().BuildServiceProvider();
+                var clock = sp.GetRequiredService<IClock>();
+                Assert.NotNull(clock);
+            }
+
+            [Fact]
+            public void Resolves_To_SystemClock()
+            {
+                var sp = new ServiceCollection().AddDomainServices().BuildServiceProvider();
+                var clock = sp.GetRequiredService<IClock>();
+                Assert.IsType<SystemClock>(clock);
+            }
+
+            [Fact]
+            public void Returns_The_Same_Instance_On_Singleton_Lifetime()
+            {
+                // Spec says IClock should be Singleton — same instance
+                // across resolutions in the same scope.
+                var sp = new ServiceCollection().AddDomainServices().BuildServiceProvider();
+                var a = sp.GetRequiredService<IClock>();
+                var b = sp.GetRequiredService<IClock>();
+                Assert.Same(a, b);
+            }
+
+            [Fact]
+            public void UtcNow_Returns_Recent()
+            {
+                var sp = new ServiceCollection().AddDomainServices().BuildServiceProvider();
+                var clock = sp.GetRequiredService<IClock>();
+                var t = clock.UtcNow;
+                Assert.True(t > DateTimeOffset.UtcNow.AddSeconds(-5));
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has `IClock.cs` (interface + SystemClock impl)
+      and `Di_Tests.cs` which expects a static extension method
+      `IServiceCollection.AddDomainServices()`. Create
+      `DomainServiceCollectionExtensions.cs` in the `App`
+      namespace with:
+
+        public static class DomainServiceCollectionExtensions
+        {
+            public static IServiceCollection AddDomainServices(this IServiceCollection services)
+            {
+                services.AddSingleton<IClock, SystemClock>();
+                return services;
+            }
+        }
+
+      It must register IClock with a SINGLETON lifetime (the test
+      asserts that two resolutions return the same instance).
+
+      Constraints:
+        - DO NOT modify IClock.cs or Di_Tests.cs.
+        - All 4 tests must pass.
+
+      DO NOT run `dotnet test` yourself — just create the file and
+      report done; the bench harness verifies.
+    timeout_seconds: 300
+    assertions:
+      - file: DomainServiceCollectionExtensions.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 4
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 2
+      - budget:
+          member_iters_max: 14
+          leader_iters_max: 14
+
+  - id: a2-validator
+    taxonomy:
+      file_count_bucket: "1"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "no"
+      requires_external_research: "no"
+    description: |
+      A `CreateUserRequest` DTO and a seeded test suite exist. The
+      agent must implement a `CreateUserRequestValidator` that
+      checks required fields, email format, and password rules,
+      returning a list of validation errors.
+    workspace: empty-git-repo
+    seed_files:
+      Validation.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>App</RootNamespace>
+            <AssemblyName>App</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      CreateUserRequest.cs: |
+        namespace App;
+
+        public sealed record CreateUserRequest(string Email, string Password, string DisplayName);
+      Validation_Tests.cs: |
+        using System.Linq;
+
+        namespace App;
+
+        public class CreateUserRequestValidator_Tests
+        {
+            [Fact]
+            public void Valid_Request_Returns_NoErrors()
+            {
+                var req = new CreateUserRequest("mark@example.com", "Hunter2!Secure", "Mark");
+                var result = new CreateUserRequestValidator().Validate(req);
+                Assert.True(result.IsValid);
+                Assert.Empty(result.Errors);
+            }
+
+            [Fact]
+            public void Missing_Email_Reports_Error()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("", "Hunter2!Secure", "Mark"));
+                Assert.False(result.IsValid);
+                Assert.Contains(result.Errors, e => e.Field == "Email");
+            }
+
+            [Fact]
+            public void Invalid_Email_Reports_Error()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("not-an-email", "Hunter2!Secure", "Mark"));
+                Assert.Contains(result.Errors, e => e.Field == "Email");
+            }
+
+            [Fact]
+            public void Short_Password_Reports_Error()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("mark@example.com", "abc", "Mark"));
+                Assert.Contains(result.Errors, e => e.Field == "Password");
+            }
+
+            [Fact]
+            public void Password_Without_Digit_Reports_Error()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("mark@example.com", "NoDigitsHere!", "Mark"));
+                Assert.Contains(result.Errors, e => e.Field == "Password");
+            }
+
+            [Fact]
+            public void Missing_DisplayName_Reports_Error()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("mark@example.com", "Hunter2!Secure", ""));
+                Assert.Contains(result.Errors, e => e.Field == "DisplayName");
+            }
+
+            [Fact]
+            public void Multiple_Errors_All_Surface()
+            {
+                var result = new CreateUserRequestValidator().Validate(
+                    new CreateUserRequest("", "abc", ""));
+                Assert.False(result.IsValid);
+                Assert.True(result.Errors.Count >= 3);
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has `CreateUserRequest.cs` (a DTO) and
+      `Validation_Tests.cs` (7 tests). Create two files in the
+      `App` namespace:
+
+      1. `ValidationResult.cs` — a result type:
+        public sealed record ValidationError(string Field, string Message);
+        public sealed class ValidationResult
+        {
+            public IReadOnlyList<ValidationError> Errors { get; }
+            public bool IsValid => Errors.Count == 0;
+            public ValidationResult(IReadOnlyList<ValidationError> errors)
+            {
+                Errors = errors;
+            }
+        }
+
+      2. `CreateUserRequestValidator.cs` — the validator:
+        public sealed class CreateUserRequestValidator
+        {
+            public ValidationResult Validate(CreateUserRequest req) { ... }
+        }
+
+        Rules (in any order; aggregate all errors into the result):
+          - Email: non-empty AND contains "@" (use a simple `req.Email.Contains('@')` check — full RFC compliance not required).
+              Field = "Email".
+          - Password: non-empty AND >= 8 chars AND contains at
+              least one digit.   Field = "Password".
+          - DisplayName: non-empty. Field = "DisplayName".
+
+        Empty Email and empty Password each surface ONE error
+        (don't double-report). Test `Multiple_Errors_All_Surface`
+        expects ≥3 errors when all three fields are bad.
+
+      Constraints:
+        - DO NOT modify CreateUserRequest.cs or Validation_Tests.cs.
+        - All 7 tests must pass.
+
+      DO NOT run `dotnet test` yourself — just create the two
+      files and report done; the bench harness verifies.
+    timeout_seconds: 360
+    assertions:
+      - file: ValidationResult.cs
+        exists: true
+      - file: CreateUserRequestValidator.cs
+        exists: true
+      - dotnet_test:
+          cwd: "."
+          timeout_seconds: 240
+          min_passed: 7
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 18
+          leader_iters_max: 14
+
+  - id: a3-controller-action
+    taxonomy:
+      file_count_bucket: "2-5"
+      has_network_io: "no"
+      ambiguity_level: "medium"
+      complexity_tier: "2"
+      requires_test_writing: "no"
+      touches_state_or_persistence: "no"
+      novel_api_vs_known: "known"
+      requires_cross_file_changes: "yes"
+      requires_external_research: "no"
+    description: |
+      Minimal ASP.NET Core controller test — agent adds a single
+      GET endpoint that returns a domain object as JSON. Two-project
+      setup (Api.csproj Web project + Api.Tests.csproj test project)
+      because Web SDK + test SDK in one project hits CS7022 entry-
+      point conflict.
+    workspace: empty-git-repo
+    seed_files:
+      Api/Api.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk.Web">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <RootNamespace>App</RootNamespace>
+            <AssemblyName>App</AssemblyName>
+          </PropertyGroup>
+        </Project>
+      Api/Program.cs: |
+        var builder = WebApplication.CreateBuilder(args);
+        builder.Services.AddControllers();
+        var app = builder.Build();
+        app.MapControllers();
+        app.Run();
+
+        public partial class Program { }   // for WebApplicationFactory
+      Api.Tests/Api.Tests.csproj: |
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+            <IsPackable>false</IsPackable>
+            <RootNamespace>App.Tests</RootNamespace>
+            <AssemblyName>App.Tests</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.0" />
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+            <PackageReference Include="xunit" Version="2.9.3" />
+            <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+          </ItemGroup>
+          <ItemGroup>
+            <ProjectReference Include="..\Api\Api.csproj" />
+          </ItemGroup>
+          <ItemGroup><Using Include="Xunit" /></ItemGroup>
+        </Project>
+      Api.Tests/Api_Tests.cs: |
+        using System.Net;
+        using System.Net.Http.Json;
+        using Microsoft.AspNetCore.Mvc.Testing;
+
+        namespace App;
+
+        public class HealthController_Tests : IClassFixture<WebApplicationFactory<Program>>
+        {
+            private readonly HttpClient _client;
+            public HealthController_Tests(WebApplicationFactory<Program> factory)
+                => _client = factory.CreateClient();
+
+            [Fact]
+            public async Task Get_Health_Returns200()
+            {
+                var resp = await _client.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            }
+
+            [Fact]
+            public async Task Get_Health_Returns_JsonBody_With_Status_Field()
+            {
+                var resp = await _client.GetAsync("/health");
+                var body = await resp.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+                Assert.NotNull(body);
+                Assert.True(body!.ContainsKey("status"));
+                Assert.Equal("ok", body["status"].ToString());
+            }
+
+            [Fact]
+            public async Task Get_Health_ContentType_IsJson()
+            {
+                var resp = await _client.GetAsync("/health");
+                Assert.NotNull(resp.Content.Headers.ContentType);
+                Assert.Contains("application/json",
+                    resp.Content.Headers.ContentType!.MediaType ?? "");
+            }
+        }
+    prompt: |
+      Use `assign_task` to dispatch an implementer with this task —
+      DO NOT do it yourself. Then review and accept_dispatch.
+
+      Implementer's task:
+
+      The workspace has TWO projects: `Api/` (ASP.NET Core 10 web
+      project with stub Program.cs) and `Api.Tests/` (xUnit test
+      project that references Api/). The test file
+      `Api.Tests/Api_Tests.cs` expects a GET `/health` endpoint
+      returning JSON `{ "status": "ok" }`.
+
+      Create `Api/HealthController.cs` (NOTE: under the `Api/`
+      directory, not workspace root) in the `App` namespace:
+
+        using Microsoft.AspNetCore.Mvc;
+
+        namespace App;
+
+        [ApiController]
+        [Route("health")]
+        public sealed class HealthController : ControllerBase
+        {
+            [HttpGet]
+            public IActionResult Get() => Ok(new { status = "ok" });
+        }
+
+      Constraints:
+        - DO NOT modify Api/Program.cs or Api.Tests/Api_Tests.cs.
+        - All 3 integration tests must pass.
+
+      DO NOT run `dotnet test` yourself — just create the file and
+      report done; the bench harness verifies.
+    timeout_seconds: 480
+    assertions:
+      - file: Api/HealthController.cs
+        exists: true
+      - dotnet_test:
+          cwd: "Api.Tests"
+          timeout_seconds: 360
+          min_passed: 3
+          max_failed: 0
+      - no_event: malformed_tool_call
+        max_count: 3
+      - budget:
+          member_iters_max: 16
+          leader_iters_max: 14

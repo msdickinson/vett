@@ -1,0 +1,106 @@
+name: probe-truncation
+description: |
+  ⭐ A LIVE PROBE BUILT TO MAKE THE CHECK FIRE. Not a working profile —
+  do not run real work with it.
+
+  WHAT IT PROVES, AND WHY A UNIT TEST COULD NOT. The truncation-recovery
+  branch in AgentLoop keys on `resp.FinishReason == ChatFinishReason.Length`.
+  The unit tests set that field directly on a scripted client, so they prove
+  the BRANCH is correct while assuming the field ever arrives. Two links in
+  the chain are still untested by them:
+
+    1. the server actually emits `finish_reason: "length"` — verified at the
+       wire on 2026-09-01 with a raw POST (max_tokens 24 -> "length",
+       uncapped -> "stop"), so this link is closed independently; and
+    2. Microsoft.Extensions.AI's OpenAI client MAPS that wire field onto
+       `ChatResponse.FinishReason` rather than dropping it.
+
+  Link 2 is the one nothing else covers, and it is exactly the shape of
+  failure that reads as a clean pass: a recovery keyed on a field the SDK
+  never populates never fires, emits nothing, and looks indistinguishable
+  from "the defect did not occur."
+
+  HOW IT FORCES THE CASE. `max_output_tokens: 48` is far below what any
+  useful reply needs, so the first generation is cut off mid-sentence before
+  it can reach a tool call.
+
+  MEASURED 2026-09-01 against gpu-2:8000 / deepseek-v4-flash:
+      it1  out_tok=48  finish_reason="length"
+           -> truncated_response_recovery  retry_count 1, retry_cap 3
+      it2  out_tok=29  finish_reason="stop"
+           -> "I'll create the file now." and on with the work
+
+  So link 2 is CLOSED: the SDK carries the field through. And the recovery
+  did more than fire -- the model READ the nudge and changed behaviour,
+  dropping from 48 truncated tokens of preamble to a 29-token reply that
+  gets to the point. Before this branch existed, it1 would have been read
+  as "the model is done" and the run would have finalised there having
+  done nothing at all.
+
+  ⛔ NOTE WHAT THIS RUN DID *NOT* SHOW: the cap never bound, because one
+  nudge was enough. `truncated_response_exhausted` is covered by unit test
+  only. Do not cite this probe as evidence for the exhaustion path.
+
+  RE-MEASURED 2026-09-01 04:30 AGAINST THE INSTALLED BINARY, because the run
+  above was against a locally built one and A PROVEN CAP IS NOT AN INSTALLED
+  CAP. `dotnet pack` from a clean checkout of 766f36e, uninstall, clear the
+  NuGet cache entry, reinstall, then drive `vett chat --stdio` through
+  epic-forge/runner.js -- which spawns
+  C:/Users/dev/.dotnet/tools/vett.exe, the same binary the ladder uses:
+
+      it1  out_tok=48  finish_reason="length"
+           -> truncated_response_recovery  retry_count 1, retry_cap 3
+      it2  out_tok=9   finish_reason="stop"
+
+  ...AND A PAIRED LIVE NEGATIVE CONTROL, same binary, same profile, same
+  endpoint, thirty seconds earlier. A shorter prompt drew a 38-token reply
+  that was PROSE WITH NO TOOL CALL and ended at finish_reason="stop": no
+  recovery event. That is the case a badly-written branch would have caught
+  ("no tool call, so nudge") and this one correctly ignores, and it happened
+  by accident rather than by construction, which is the only reason it is
+  worth as much as it is.
+
+  ⛔ AND NOTE WHAT MADE THAT CONTROL NECESSARY. The first attempt at THIS
+  probe against the installed binary drew 38 tokens and stopped -- 48 is
+  above what a short reply needs, so the cap did not bind and no recovery
+  fired. That reads exactly like "the fix is not installed" and is nothing
+  of the kind: it is a null with no power, because the precondition never
+  occurred. The 48-token result above required a prompt that DEMANDS prose.
+  A probe that only usually fires cannot tell an inert mechanism from an
+  unlucky run.
+
+  Pair with probe-truncation-control.yaml, which is this profile with room
+  to finish: same prompt, finish_reason "stop", no recovery event. Firing
+  here and staying silent there is what proves the branch keys on the
+  finish reason rather than on prose or on a missing tool call.
+
+  `timeout_minutes` is 5 and the endpoint timeout 60s: the probe must fail
+  fast, and it deliberately cannot fit inside its own bound, which is the
+  point.
+
+sandbox:
+  type: local
+  default_cwd: .
+
+llm:
+  # provider: is a CODE-PATH SELECTOR, not a locality claim; `endpoint` is
+  # what tells the truth about where the tokens are produced.
+  provider: local
+  endpoint: http://gpu-2:8000/v1
+  model: deepseek-v4-flash
+  temperature: 0.3
+  top_p: 0.95
+  request_timeout_seconds: 60
+  num_retries: 0
+  # ⭐ THE INDEPENDENT VARIABLE. Small enough that truncation is certain
+  # rather than likely — a probe that only USUALLY fires cannot distinguish
+  # "the mechanism is inert" from "this run got lucky".
+  max_output_tokens: 48
+
+system_prompt: |
+  You are a careful engineer. Before doing anything else, explain your
+  reasoning at length in prose — walk through every consideration in
+  detail — and only afterwards make a tool call.
+
+timeout_minutes: 5
+max_iterations: 8
